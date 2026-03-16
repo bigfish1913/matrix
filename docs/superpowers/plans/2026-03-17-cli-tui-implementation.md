@@ -1594,7 +1594,7 @@ async-stream.workspace = true
 ```rust
 // In crates/core/src/tui/mod.rs, add:
 pub mod terminal;
-pub use terminal::{init_terminal, restore_terminal, event_stream};
+pub use terminal::{init_terminal, restore_terminal, event_stream, MatrixTerminal};
 ```
 
 - [ ] **Step 4: Verify compilation**
@@ -2063,7 +2063,7 @@ task.status = TaskStatus::Completed;
 store.save_task(&task).await?;
 
 // EMIT: Task completed
-if let Some(sender) = store.event_sender() {
+if let Some(ref sender) = event_sender {
     let _ = sender.send(Event::TaskStatusChanged {
         id: task.id.clone(),
         status: TaskStatus::Completed,
@@ -2075,7 +2075,7 @@ task.status = TaskStatus::Failed;
 store.save_task(&task).await?;
 
 // EMIT: Task failed
-if let Some(sender) = store.event_sender() {
+if let Some(ref sender) = event_sender {
     let _ = sender.send(Event::TaskStatusChanged {
         id: task.id.clone(),
         status: TaskStatus::Failed,
@@ -2083,15 +2083,30 @@ if let Some(sender) = store.event_sender() {
 }
 ```
 
+**Note:** The `run_task_pipeline` function signature must be updated to include `event_sender: Option<EventSender>` parameter:
+
+```rust
+async fn run_task_pipeline(
+    store: Arc<TaskStore>,
+    executor: Arc<TaskExecutor>,
+    mut task: Task,
+    event_sender: Option<EventSender>,
+) -> Result<()> {
+    // ... function body ...
+}
+```
+
+And call sites in `run_dispatcher()` must pass the sender:
+
+```rust
+let event_sender = self.config.event_sender.clone();
+join_set.spawn(async move {
+    let _ = run_task_pipeline(store, executor, task, event_sender).await;
+    (task_id, 0usize)
+});
+```
+
 - [ ] **Step 6: Commit**
-
-```bash
-git add crates/core/src/orchestrator/orchestrator.rs
-git commit -m "feat(orchestrator): emit events for TUI at key execution points"
-```
-```
-
-- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/core/src/orchestrator/orchestrator.rs
