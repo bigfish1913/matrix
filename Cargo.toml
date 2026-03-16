@@ -1,0 +1,49 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/bigfish1913/matrix"
+authors = ["bigfish1913"]
+description = "Long-Running Agent Orchestrator using Claude CLI"
+readme = "README.md"
+
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 错误处理
+thiserror = "1"
+anyhow = "1"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+
+# 正则表达式
+regex = "1"
+
+# 文件遍历
+walkdir = "2"
+
+# 临时目录
+tempfile = "3"
+
+# 内部 crate
+matrix-core = { path = "crates/core" }
