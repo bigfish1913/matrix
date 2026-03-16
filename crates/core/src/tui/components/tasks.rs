@@ -72,9 +72,9 @@ impl TasksPanel {
                     Span::styled(&task.id, Style::default().fg(Color::Cyan)),
                     Span::raw("  "),
                     Span::styled(
-                        // Truncate title to fit
-                        if task.title.len() > 40 {
-                            format!("{}...", &task.title[..37])
+                        // Truncate title to fit (Unicode-safe)
+                        if task.title.chars().count() > 40 {
+                            format!("{}...", task.title.chars().take(37).collect::<String>())
                         } else {
                             task.title.clone()
                         },
