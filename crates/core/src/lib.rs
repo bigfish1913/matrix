@@ -10,6 +10,7 @@ pub mod executor;
 pub mod models;
 pub mod orchestrator;
 pub mod store;
+pub mod tui;
 
 pub use agent::{AgentPool, ClaudeResult, ClaudeRunner, SharedAgentPool};
 pub use config::*;
@@ -19,3 +20,4 @@ pub use executor::{ExecutorConfig, TaskExecutor};
 pub use models::{Complexity, Manifest, Task, TaskStatus};
 pub use orchestrator::{Orchestrator, OrchestratorConfig};
 pub use store::TaskStore;
+pub use tui::{Event, TuiApp, TuiEvent, VerbosityLevel};
