@@ -38,6 +38,7 @@ pub struct TaskDisplay {
     pub title: String,
     pub status: TaskStatus,
     pub duration: Option<Duration>,
+    pub started_at: Option<Instant>,
 }
 
 /// Claude output line
@@ -218,15 +219,21 @@ impl TuiApp {
                     title,
                     status: TaskStatus::Pending,
                     duration: None,
+                    started_at: None,
                 });
                 self.total_count = self.tasks.len();
             }
             Event::TaskStatusChanged { id, status } => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
-                    task.status = status;
-                    if status == TaskStatus::Completed {
-                        task.duration = self.start_time.map(|t| t.elapsed());
+                    // Track when task starts
+                    if status == TaskStatus::InProgress && task.started_at.is_none() {
+                        task.started_at = Some(Instant::now());
                     }
+                    // Calculate duration from per-task start time
+                    if status == TaskStatus::Completed {
+                        task.duration = task.started_at.map(|s| s.elapsed());
+                    }
+                    task.status = status;
                 }
 
                 // Update counts
