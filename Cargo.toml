@@ -52,6 +52,11 @@ matrix-core = { path = "crates/core" }
 # 依赖检查
 which = "6"
 
+# TUI
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures = "0.3"
+
 # Bevy optimization profiles
 [profile.dev]
 opt-level = 1
