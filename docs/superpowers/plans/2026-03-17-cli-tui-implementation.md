@@ -99,7 +99,7 @@ pub mod event;
 pub mod render;
 
 pub use app::TuiApp;
-pub use event::{Event, EventType, VerbosityLevel};
+pub use event::{Event, TuiEvent, VerbosityLevel};
 ```
 
 - [ ] **Step 2: Create components module file**
@@ -129,7 +129,7 @@ pub use tasks::TasksPanel;
 pub mod tui;
 
 // In exports section, add:
-pub use tui::{Event, EventType, TuiApp, VerbosityLevel};
+pub use tui::{Event, TuiEvent, TuiApp, VerbosityLevel};
 ```
 
 - [ ] **Step 4: Verify module compiles**
@@ -143,7 +143,7 @@ pub struct TuiApp;
 
 ```rust
 // crates/core/src/tui/event.rs
-pub enum EventType {}
+pub enum TuiEvent {}
 pub enum VerbosityLevel {}
 pub struct Event;
 ```
@@ -458,18 +458,15 @@ impl Default for LogBuffer {
 }
 ```
 
-- [ ] **Step 2: Add imports to event.rs**
+- [ ] **Step 2: Note: LogLevel is defined in event.rs itself**
 
-```rust
-// Add at top of crates/core/src/tui/event.rs:
-use super::{LogLevel, LogEntry};
-```
+No additional imports are needed since `LogLevel` is defined in the same file. `LogEntry` is in the parent module but `Event::Log` uses inline fields, not `LogEntry`, so no import is required here.
 
 - [ ] **Step 3: Update module exports**
 
 ```rust
 // Update crates/core/src/tui/mod.rs exports:
-pub use event::{Event, EventType, ExecutionState, Key, LogLevel, TuiEvent, VerbosityLevel};
+pub use event::{Event, ExecutionState, Key, LogLevel, TuiEvent, VerbosityLevel};
 pub use self::{LogBuffer, LogEntry, EventSender, EventReceiver, create_event_channel};
 ```
 
