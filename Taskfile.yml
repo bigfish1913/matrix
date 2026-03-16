@@ -41,26 +41,29 @@ tasks:
 
   install:
     desc: 一键安装到全局
+    deps: [build]
     cmds:
-      - task: build
-      - |
-        if [ "$OSTYPE" = "msys" ] || [ "$OSTYPE" = "win32" ]; then
-          cp target/release/matrix.exe ./matrix.exe 2>/dev/null || echo "Binary not found, run task build first"
-          echo "Installed matrix.exe to current directory"
-        else
-          sudo cp target/release/matrix {{.INSTALL_DIR}}/matrix 2>/dev/null || cp target/release/matrix ./matrix
-          sudo chmod +x {{.INSTALL_DIR}}/matrix 2>/dev/null || chmod +x ./matrix
-          echo "Installed matrix"
-        fi
+      - cmd: powershell -Command "Copy-Item target/release/matrix.exe -Destination $HOME/.local/bin/matrix.exe -Force; Write-Host 'Installed matrix.exe to ~/.local/bin/'"
+        platforms: [windows]
+      - cmd: |
+          mkdir -p ~/.local/bin
+          cp target/release/matrix ~/.local/bin/matrix
+          chmod +x ~/.local/bin/matrix 2>/dev/null || true
+          echo "Installed matrix to ~/.local/bin/"
+        platforms: [linux, darwin]
 
   install-local:
     desc: 安装到用户目录
+    deps: [build]
     cmds:
-      - task: build
-      - mkdir -p ~/.local/bin
-      - cp target/release/matrix ~/.local/bin/matrix 2>/dev/null || cp target/release/matrix.exe ~/.local/bin/matrix.exe 2>/dev/null
-      - chmod +x ~/.local/bin/matrix 2>/dev/null || true
-      - echo "Installed to ~/.local/bin/"
+      - cmd: powershell -Command "New-Item -ItemType Directory -Force -Path $HOME/.local/bin; Copy-Item target/release/matrix.exe -Destination $HOME/.local/bin/matrix.exe -Force; Write-Host 'Installed matrix.exe to ~/.local/bin/'"
+        platforms: [windows]
+      - cmd: |
+          mkdir -p ~/.local/bin
+          cp target/release/matrix ~/.local/bin/matrix
+          chmod +x ~/.local/bin/matrix 2>/dev/null || true
+          echo "Installed to ~/.local/bin/"
+        platforms: [linux, darwin]
 
   clean:
     desc: 清理构建产物
