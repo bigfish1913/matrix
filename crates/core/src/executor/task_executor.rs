@@ -188,7 +188,8 @@ impl TaskExecutor {
                     self.agent_pool.record(task, sid, thread_name).await;
                 }
 
-                info!(task_id = %task.id, stats = %self.agent_pool.stats().await, "Task executed");
+                let stats = self.agent_pool.stats().await;
+                info!(task_id = %task.id, stats = %stats, "Task executed");
                 Ok(true)
             }
             Err(e) => {
