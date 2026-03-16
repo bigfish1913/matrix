@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.local/bin/matrix.exe --help)"
+    ]
+  }
+}

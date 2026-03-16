@@ -5,10 +5,10 @@ use crate::config::MAX_PROMPT_LENGTH;
 use crate::error::{Error, Result};
 use std::path::Path;
 use std::process::Stdio;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Result from a Claude CLI call
 #[derive(Debug, Clone)]
@@ -75,7 +75,24 @@ impl ClaudeRunner {
             prompt.to_string()
         };
 
-        // Build command
+        if self.debug_mode {
+            // Use streaming mode for real-time output
+            self.call_streaming(&prompt, workdir, timeout_duration, mcp_config, resume_session_id).await
+        } else {
+            // Use batch mode
+            self.call_batch(&prompt, workdir, timeout_duration, mcp_config, resume_session_id).await
+        }
+    }
+
+    /// Batch mode - wait for completion
+    async fn call_batch(
+        &self,
+        prompt: &str,
+        workdir: &Path,
+        timeout_duration: Duration,
+        mcp_config: Option<&Path>,
+        resume_session_id: Option<&str>,
+    ) -> Result<ClaudeResult> {
         let mut cmd = Command::new("claude");
         cmd.args(["--model", &self.model])
             .args(["--output-format", "json"])
@@ -85,10 +102,6 @@ impl ClaudeRunner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
-        if self.debug_mode {
-            cmd.arg("--verbose");
-        }
 
         if let Some(mcp) = mcp_config {
             if let Some(mcp_str) = mcp.to_str() {
@@ -100,7 +113,72 @@ impl ClaudeRunner {
             cmd.args(["--resume", sid]);
         }
 
-        debug!(model = %self.model, "Calling Claude CLI");
+        debug!(model = %self.model, "Calling Claude CLI (batch mode)");
+
+        let result = timeout(timeout_duration, async {
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| Error::ClaudeCli(format!("Failed to spawn: {}", e)))?;
+
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(prompt.as_bytes())
+                    .await
+                    .map_err(|e| Error::ClaudeUi(format!("Failed to write stdin: {}", e)))?;
+                stdin
+                    .shutdown()
+                    .await
+                    .map_err(|e| Error::ClaudeCli(format!("Failed to close stdin: {}", e)))?;
+            }
+
+            let output = child
+                .wait_with_output()
+                .await
+                .map_err(|e| Error::ClaudeCli(format!("Failed to wait: {}", e)))?;
+
+            Ok::<_, Error>(output)
+        })
+        .await
+        .map_err(|_| Error::Timeout("Claude call timed out".to_string()))??;
+
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let combined = format!("{}{}", stdout, stderr);
+
+        parse_claude_result(&combined)
+    }
+
+    /// Streaming mode - real-time output
+    async fn call_streaming(
+        &self,
+        prompt: &str,
+        workdir: &Path,
+        timeout_duration: Duration,
+        mcp_config: Option<&Path>,
+        resume_session_id: Option<&str>,
+    ) -> Result<ClaudeResult> {
+        let mut cmd = Command::new("claude");
+        cmd.args(["--model", &self.model])
+            .args(["--output-format", "stream-json"])
+            .arg("--verbose")
+            .arg("--dangerously-skip-permissions")
+            .arg("-p")
+            .current_dir(workdir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(mcp) = mcp_config {
+            if let Some(mcp_str) = mcp.to_str() {
+                cmd.args(["--mcp-config", mcp_str]);
+            }
+        }
+
+        if let Some(sid) = resume_session_id {
+            cmd.args(["--resume", sid]);
+        }
+
+        info!(model = %self.model, "Calling Claude CLI (streaming mode)");
 
         let result = timeout(timeout_duration, async {
             let mut child = cmd
@@ -119,23 +197,86 @@ impl ClaudeRunner {
                     .map_err(|e| Error::ClaudeCli(format!("Failed to close stdin: {}", e)))?;
             }
 
-            // Collect output
-            let output = child
-                .wait_with_output()
-                .await
+            // Read stdout in real-time
+            let stdout = child.stdout.take().expect("stdout not captured");
+            let mut reader = BufReader::new(stdout).lines();
+            let mut final_result: Option<ClaudeResult> = None;
+            let mut all_text = String::new();
+
+            while let Some(line) = reader.next_line().await.map_err(|e| {
+                Error::ClaudeCli(format!("Failed to read stdout: {}", e))
+            })? {
+                // Parse and display each line
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                    // Check for result
+                    if let Some(result) = json.get("result") {
+                        if let Some(text) = result.as_str() {
+                            all_text = text.to_string();
+                            // Print result text
+                            println!("{}", text);
+                        }
+                    }
+
+                    // Check for session_id
+                    if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
+                        if final_result.is_none() {
+                            final_result = Some(ClaudeResult {
+                                text: String::new(),
+                                is_error: false,
+                                session_id: Some(sid.to_string()),
+                            });
+                        } else if let Some(ref mut r) = final_result {
+                            r.session_id = Some(sid.to_string());
+                        }
+                    }
+
+                    // Check for is_error
+                    if let Some(is_error) = json.get("is_error").and_then(|v| v.as_bool()) {
+                        if let Some(ref mut r) = final_result {
+                            r.is_error = is_error;
+                        }
+                    }
+
+                    // Check for tool use (for debug output)
+                    if let Some(tool_name) = json.get("tool_name").and_then(|v| v.as_str()) {
+                        info!("[Tool] {}", tool_name);
+                    }
+
+                    // Check for message content
+                    if let Some(content) = json.get("content").and_then(|v| v.as_array()) {
+                        for item in content {
+                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                println!("{}", text);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Wait for process to complete
+            let status = child.wait().await
                 .map_err(|e| Error::ClaudeCli(format!("Failed to wait: {}", e)))?;
 
-            Ok::<_, Error>(output)
+            if !status.success() {
+                warn!(exit_code = ?status.code(), "Claude exited with non-zero status");
+            }
+
+            // Build final result
+            if let Some(mut r) = final_result {
+                r.text = all_text;
+                Ok::<ClaudeResult, Error>(r)
+            } else {
+                Ok::<ClaudeResult, Error>(ClaudeResult {
+                    text: all_text,
+                    is_error: false,
+                    session_id: None,
+                })
+            }
         })
         .await
         .map_err(|_| Error::Timeout("Claude call timed out".to_string()))??;
 
-        let stdout = String::from_utf8_lossy(&result.stdout);
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        let combined = format!("{}{}", stdout, stderr);
-
-        // Parse JSON result
-        parse_claude_result(&combined)
+        Ok(result)
     }
 }
 

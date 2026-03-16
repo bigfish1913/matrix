@@ -22,6 +22,9 @@ pub enum Error {
     #[error("Claude CLI error: {0}")]
     ClaudeCli(String),
 
+    #[error("Claude UI error: {0}")]
+    ClaudeUi(String),
+
     #[error("Git error: {0}")]
     Git(String),
 

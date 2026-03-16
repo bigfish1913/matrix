@@ -2,6 +2,7 @@
 members = [
     "crates/core",
     "crates/cli",
+    "workspace",
 ]
 resolver = "2"
 
@@ -50,3 +51,15 @@ matrix-core = { path = "crates/core" }
 
 # 依赖检查
 which = "6"
+
+# Bevy optimization profiles
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
