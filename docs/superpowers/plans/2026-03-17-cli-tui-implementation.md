@@ -54,6 +54,7 @@ Cargo.toml               # Add workspace dependencies
 # TUI
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
+futures = "0.3"
 ```
 
 - [ ] **Step 2: Add dependencies to matrix-core**
@@ -63,6 +64,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 
 ratatui.workspace = true
 crossterm.workspace = true
+futures.workspace = true
 ```
 
 - [ ] **Step 3: Verify dependencies compile**
@@ -145,7 +147,7 @@ pub struct TuiApp;
 // crates/core/src/tui/event.rs
 pub enum TuiEvent {}
 pub enum VerbosityLevel {}
-pub struct Event;
+pub enum Event {}
 ```
 
 ```rust
@@ -208,7 +210,7 @@ use crate::models::TaskStatus;
 use std::time::Duration;
 
 /// Verbosity level for Claude output display
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VerbosityLevel {
     /// Only final results
     Quiet,
@@ -393,6 +395,8 @@ git commit -m "feat(tui): define event types for orchestrator communication"
 - Modify: `crates/core/src/tui/mod.rs`
 
 - [ ] **Step 1: Add event channel types to mod.rs**
+
+Add these type definitions after the module declarations (`pub mod ...`) but before the existing `pub use` statements:
 
 ```rust
 // Add to crates/core/src/tui/mod.rs
@@ -1579,10 +1583,8 @@ async-stream = "0.3"
 
 # In crates/core/Cargo.toml [dependencies], add:
 async-stream.workspace = true
-futures.workspace = true
 
-# Also add futures to workspace:
-futures = "0.3"
+# Note: futures was already added in Chunk 1
 ```
 
 - [ ] **Step 3: Update module exports**
