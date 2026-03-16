@@ -471,7 +471,9 @@ No additional imports are needed since `LogLevel` is defined in the same file. `
 ```rust
 // Update crates/core/src/tui/mod.rs exports:
 pub use event::{Event, ExecutionState, Key, LogLevel, TuiEvent, VerbosityLevel};
-pub use self::{LogBuffer, LogEntry, EventSender, EventReceiver, create_event_channel};
+
+// Export types defined in this module:
+pub use {LogBuffer, LogEntry, EventSender, EventReceiver, create_event_channel};
 ```
 
 - [ ] **Step 4: Verify compilation**
@@ -1302,7 +1304,7 @@ impl StatusBar {
             VerbosityLevel::Verbose => "V",
         };
 
-        Line::from(vec![
+        let line = Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::Gray)),
             Span::styled(state.to_string(), Style::default().fg(state_color).add_modifier(Modifier::BOLD)),
             Span::styled(task_str, Style::default().fg(Color::Cyan)),
@@ -1319,7 +1321,7 @@ impl StatusBar {
             Span::styled("?:Help q:Quit", Style::default().fg(Color::DarkGray)),
         ]);
 
-        Paragraph::new(Line::default())
+        Paragraph::new(line)
     }
 }
 ```
@@ -1491,7 +1493,7 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use super::render::MatrixTerminal;
-use super::event::{Key, TuiEvent};
+use super::{Key, TuiEvent};
 
 /// Initialize the terminal for TUI mode
 pub fn init_terminal() -> Result<MatrixTerminal> {
@@ -1706,8 +1708,6 @@ git commit -m "feat(cli): add --no-tui, --quiet, --verbose flags"
 
 - [ ] **Step 1: Update main function to support TUI mode**
 
-This is a larger change. Replace the main function with TUI-aware version:
-
 ```rust
 // In crates/cli/src/main.rs, update main function:
 
@@ -1748,13 +1748,8 @@ async fn run_with_tui(args: Args, verbosity: matrix_core::VerbosityLevel) -> any
         .with_event_receiver(event_receiver)
         .with_log_buffer(log_buffer.clone());
 
-    // Run TUI event loop
-    let result = run_tui_loop(terminal, app, args, event_sender, log_buffer).await;
-
-    // Restore terminal
-    // Note: We need to get the terminal back from the loop
-
-    result
+    // Run TUI event loop with orchestrator
+    run_tui_loop(terminal, app, args, event_sender, log_buffer).await
 }
 
 async fn run_tui_loop(
@@ -1762,16 +1757,17 @@ async fn run_tui_loop(
     mut app: TuiApp,
     args: Args,
     event_sender: matrix_core::EventSender,
-    log_buffer: LogBuffer,
+    _log_buffer: LogBuffer,
 ) -> anyhow::Result<()> {
     use matrix_core::tui::*;
 
-    // Setup orchestrator in background
+    // Prepare orchestrator config
     let workspace = resolve_workspace(&args)?;
     let tasks_dir = workspace.join(".matrix").join("tasks");
 
     let doc_content = if let Some(doc_path) = &args.doc {
         if !doc_path.exists() {
+            restore_terminal(terminal)?;
             anyhow::bail!("Document not found: {}", doc_path.display());
         }
         Some(std::fs::read_to_string(doc_path)?)
@@ -1781,7 +1777,7 @@ async fn run_tui_loop(
 
     let config = matrix_core::OrchestratorConfig {
         goal: args.goal.clone(),
-        workspace,
+        workspace: workspace.clone(),
         tasks_dir,
         doc_content,
         mcp_config: args.mcp_config,
@@ -1789,19 +1785,22 @@ async fn run_tui_loop(
         debug_mode: args.debug,
         ask_mode: args.ask,
         resume: args.resume,
+        event_sender: Some(event_sender),
     };
 
-    // For now, we'll run orchestrator inline
-    // In a full implementation, this would run in a separate task
+    // Spawn orchestrator as background task
+    let orchestrator_handle = tokio::spawn(async move {
+        let mut orchestrator = matrix_core::Orchestrator::new(config).await?;
+        orchestrator.run().await
+    });
 
-    // Create event stream
+    // Create event stream for keyboard input
     let mut events = event_stream();
-
-    // Run the event loop
     let mut terminal = terminal;
 
+    // Run the TUI event loop
     while app.running {
-        // Poll events
+        // Poll orchestrator events
         app.poll_events();
 
         // Handle terminal events
@@ -1813,6 +1812,25 @@ async fn run_tui_loop(
                     TuiEvent::Resize(_, _) => {}
                     TuiEvent::Orchestrator(e) => app.process_event(e),
                 }
+            }
+
+            // Check if orchestrator finished
+            result = &mut orchestrator_handle => {
+                match result {
+                    Ok(Ok(())) => {
+                        app.state = matrix_core::ExecutionState::Completed;
+                        // Continue running so user can see results
+                    }
+                    Ok(Err(e)) => {
+                        app.state = matrix_core::ExecutionState::Failed;
+                        eprintln!("Orchestrator error: {}", e);
+                    }
+                    Err(e) => {
+                        app.state = matrix_core::ExecutionState::Failed;
+                        eprintln!("Task join error: {}", e);
+                    }
+                }
+                break;
             }
         }
 
@@ -1826,7 +1844,7 @@ async fn run_tui_loop(
     Ok(())
 }
 
-async fn run_simple(args: Args, verbosity: matrix_core::VerbosityLevel) -> anyhow::Result<()> {
+async fn run_simple(args: Args, _verbosity: matrix_core::VerbosityLevel) -> anyhow::Result<()> {
     // Initialize logging for simple mode
     tracing_subscriber::registry()
         .with(
@@ -1863,6 +1881,7 @@ async fn run_simple(args: Args, verbosity: matrix_core::VerbosityLevel) -> anyho
         debug_mode: args.debug,
         ask_mode: args.ask,
         resume: args.resume,
+        event_sender: None,
     };
 
     // Run orchestrator
@@ -1876,26 +1895,13 @@ async fn run_simple(args: Args, verbosity: matrix_core::VerbosityLevel) -> anyho
 - [ ] **Step 2: Verify compilation**
 
 Run: `cargo check --workspace`
-Expected: May have some errors to fix
+Expected: May have errors about missing `event_sender` field in OrchestratorConfig
 
-- [ ] **Step 3: Fix any compilation errors**
-
-The code above needs the orchestrator to be modified to emit events. For now, let's make a simpler version that works:
-
-```rust
-// Simplified version - just make it compile
-async fn run_with_tui(args: Args, _verbosity: matrix_core::VerbosityLevel) -> anyhow::Result<()> {
-    // For now, fall back to simple mode
-    // TUI integration will be completed in next iteration
-    run_simple(args, _verbosity).await
-}
-```
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add crates/cli/src/main.rs
-git commit -m "feat(cli): integrate TUI mode detection (WIP)"
+git commit -m "feat(cli): integrate TUI mode with background orchestrator"
 ```
 
 ---
@@ -1963,40 +1969,126 @@ impl Orchestrator {
 }
 ```
 
-- [ ] **Step 3: Emit events at key points**
+- [ ] **Step 3: Emit events at key points in orchestrator**
+
+Add event emissions to the `run()` method at these specific locations:
 
 ```rust
-// In run() method, add events:
+// In crates/core/src/orchestrator/orchestrator.rs run() method:
 
-async fn run(&mut self) -> Result<()> {
+pub async fn run(&mut self) -> Result<()> {
     self.start_time = Some(Instant::now());
     self.print_header();
 
-    // Emit state change
+    // Ensure .gitignore exists
+    self.ensure_gitignore().await?;
+
+    // Phase 0: Interactive clarification (optional)
+    let clarification = if self.config.ask_mode && !self.config.resume {
+        self.clarify_goal().await?
+    } else {
+        String::new()
+    };
+
+    // EMIT: Start generating tasks
     self.emit_event(Event::ExecutionStateChanged {
         state: ExecutionState::Generating,
     });
 
-    // ... existing code ...
+    // Phase 1: Generate or resume tasks
+    if self.store.total().await? > 0 {
+        self.resume_tasks().await?;
+    } else {
+        self.generate_tasks(&clarification).await?;
+    }
 
-    // When generating tasks:
+    // EMIT: Tasks generated, starting execution
     self.emit_event(Event::ExecutionStateChanged {
         state: ExecutionState::Running,
     });
 
-    // When tasks are created:
-    for task in &tasks {
-        self.emit_event(Event::TaskCreated {
-            id: task.id.clone(),
-            title: task.title.clone(),
-        });
-    }
+    // EMIT: Model info
+    self.emit_event(Event::ModelChanged {
+        model: self.executor.runner.model().to_string(),
+    });
 
-    // On completion:
+    // Show progress
+    self.print_progress().await;
+
+    // Run dispatcher
+    self.run_dispatcher().await?;
+
+    // Phase 5: Final tests
+    self.run_final_tests().await?;
+
+    // EMIT: Execution completed
     self.emit_event(Event::ExecutionStateChanged {
         state: ExecutionState::Completed,
     });
+
+    // Final summary
+    self.print_summary().await?;
+
+    Ok(())
 }
+```
+
+- [ ] **Step 4: Emit events in generate_tasks()**
+
+```rust
+// In generate_tasks() method, after parsing tasks:
+
+if let Ok(tasks_response) = serde_json::from_str::<TasksResponse>(&result.text) {
+    info!(count = tasks_response.tasks.len(), "Tasks generated");
+
+    for t in &tasks_response.tasks {
+        // EMIT: Task created
+        self.emit_event(Event::TaskCreated {
+            id: t.id.clone(),
+            title: t.title.clone(),
+        });
+    }
+
+    // ... rest of code
+}
+```
+
+- [ ] **Step 5: Emit events in run_task_pipeline()**
+
+```rust
+// In run_task_pipeline() function (at end of orchestrator.rs):
+
+// After task execution succeeds:
+task.status = TaskStatus::Completed;
+store.save_task(&task).await?;
+
+// EMIT: Task completed
+if let Some(sender) = store.event_sender() {
+    let _ = sender.send(Event::TaskStatusChanged {
+        id: task.id.clone(),
+        status: TaskStatus::Completed,
+    });
+}
+
+// After task fails:
+task.status = TaskStatus::Failed;
+store.save_task(&task).await?;
+
+// EMIT: Task failed
+if let Some(sender) = store.event_sender() {
+    let _ = sender.send(Event::TaskStatusChanged {
+        id: task.id.clone(),
+        status: TaskStatus::Failed,
+    });
+}
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/core/src/orchestrator/orchestrator.rs
+git commit -m "feat(orchestrator): emit events for TUI at key execution points"
+```
 ```
 
 - [ ] **Step 4: Commit**
