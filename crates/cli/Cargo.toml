@@ -1,0 +1,20 @@
+[package]
+name = "matrix-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for Matrix Agent Orchestrator"
+
+[[bin]]
+name = "matrix"
+path = "src/main.rs"
+
+[dependencies]
+matrix-core.workspace = true
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
