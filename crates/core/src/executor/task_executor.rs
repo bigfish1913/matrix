@@ -1,7 +1,7 @@
 //! TaskExecutor - handles task execution, testing, and fixing.
 
 use crate::agent::{ClaudeRunner, SharedAgentPool};
-use crate::config::{MAX_PROMPT_LENGTH, MAX_WORKSPACE_FILES, TIMEOUT_EXEC};
+use crate::config::{Model, MAX_PROMPT_LENGTH, MAX_WORKSPACE_FILES, TIMEOUT_EXEC};
 use crate::detector::ProjectDetector;
 use crate::detector::TestRunnerDetector;
 use crate::error::Result;
@@ -28,8 +28,8 @@ pub struct ExecutorConfig {
 impl Default for ExecutorConfig {
     fn default() -> Self {
         Self {
-            model_fast: "glm-5".to_string(),
-            model_smart: "glm-5".to_string(),
+            model_fast: Model::default_fast().to_string(),
+            model_smart: Model::default_smart().to_string(),
             doc_content: None,
             mcp_config: None,
             debug_mode: false,
@@ -448,8 +448,8 @@ mod tests {
     #[test]
     fn test_executor_config_default() {
         let config = ExecutorConfig::default();
-        assert_eq!(config.model_fast, "glm-5");
-        assert_eq!(config.model_smart, "glm-5");
+        assert_eq!(config.model_fast, "haiku");
+        assert_eq!(config.model_smart, "sonnet");
         assert!(config.doc_content.is_none());
     }
 }

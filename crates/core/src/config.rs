@@ -22,8 +22,8 @@ impl Model {
 impl fmt::Display for Model {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Fast => write!(f, "glm-5"),
-            Self::Smart => write!(f, "glm-5"),
+            Self::Fast => write!(f, "haiku"),
+            Self::Smart => write!(f, "sonnet"),
         }
     }
 }
@@ -63,8 +63,8 @@ mod tests {
 
     #[test]
     fn test_model_display() {
-        assert_eq!(Model::Fast.to_string(), "glm-5");
-        assert_eq!(Model::Smart.to_string(), "glm-5");
+        assert_eq!(Model::Fast.to_string(), "haiku");
+        assert_eq!(Model::Smart.to_string(), "sonnet");
     }
 
     #[test]

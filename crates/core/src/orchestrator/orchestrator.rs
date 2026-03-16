@@ -211,12 +211,20 @@ Respond ONLY with JSON:
         info!(goal = %self.config.goal, "Generating task list");
 
         let prompt = format!(
-            r#"You are a software project planner. Break down the following goal into tasks.
+            r#"You are a software project planner. Break down the following goal into development tasks.
 
 PROJECT GOAL: {}
 
-Generate 3-10 tasks. Respond ONLY with JSON:
-{{"tasks": [{{"id": "task-001", "title": "...", "description": "...", "depends_on": []}}]}}"#,
+CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, just the JSON object.
+Do NOT include any text before or after the JSON.
+
+Generate 3-10 tasks using this EXACT format:
+{{"tasks": [{{"id": "task-001", "title": "Short title", "description": "Detailed description", "depends_on": []}}]}}
+
+Example response:
+{{"tasks": [{{"id": "task-001", "title": "Setup project", "description": "Initialize project structure", "depends_on": []}}, {{"id": "task-002", "title": "Create models", "description": "Define data models", "depends_on": ["task-001"]}}]}}
+
+Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             self.config.goal
         );
 
@@ -228,20 +236,42 @@ Generate 3-10 tasks. Respond ONLY with JSON:
 
         if result.is_error {
             error!(error = %result.text, "Failed to generate tasks");
-            return Ok(());
+            return Err(Error::ClaudeCli(format!("Task generation failed: {}", result.text)));
         }
 
+        // Log the raw response for debugging
+        debug!(response = %result.text, "Claude response for task generation");
+
+        // Try to extract JSON from the response
+        let text = result.text.trim();
+
+        // Try to find JSON object in the text
+        let json_text = if text.starts_with('{') {
+            text.to_string()
+        } else if let Some(json) = extract_json_from_text(text) {
+            json
+        } else {
+            error!(response = %text, "No JSON found in response");
+            return Err(Error::ParseError(format!("No JSON object found in response: {}", &text[..text.len().min(500)])));
+        };
+
         // Parse tasks
-        if let Ok(tasks_response) = serde_json::from_str::<TasksResponse>(&result.text) {
-            info!(count = tasks_response.tasks.len(), "Tasks generated");
+        match serde_json::from_str::<TasksResponse>(&json_text) {
+            Ok(tasks_response) => {
+                info!(count = tasks_response.tasks.len(), "Tasks generated");
 
-            for t in tasks_response.tasks {
-                let mut task = Task::new(t.id, t.title, t.description);
-                task.depends_on = t.depends_on;
-                self.store.save_task(&task).await?;
+                for t in tasks_response.tasks {
+                    let mut task = Task::new(t.id, t.title, t.description);
+                    task.depends_on = t.depends_on;
+                    self.store.save_task(&task).await?;
+                }
+
+                self.store.save_manifest(&self.config.goal).await?;
             }
-
-            self.store.save_manifest(&self.config.goal).await?;
+            Err(e) => {
+                error!(error = %e, json = %json_text, "Failed to parse tasks JSON");
+                return Err(Error::ParseError(format!("Failed to parse tasks: {}. JSON: {}", e, &json_text[..json_text.len().min(500)])));
+            }
         }
 
         Ok(())
@@ -685,4 +715,32 @@ struct AssessResponse {
 struct SubtaskDef {
     title: String,
     description: String,
+}
+
+/// Extract JSON object from text that may contain other content
+fn extract_json_from_text(text: &str) -> Option<String> {
+    // Find the first '{'
+    let start = text.find('{')?;
+    let mut depth = 0;
+    let mut end = start;
+
+    for (i, c) in text[start..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if depth == 0 && end > start {
+        Some(text[start..end].to_string())
+    } else {
+        None
+    }
 }

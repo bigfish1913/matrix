@@ -1,5 +1,6 @@
 //! Claude CLI runner - handles subprocess calls to claude.
 
+use crate::config::Model;
 use crate::config::MAX_PROMPT_LENGTH;
 use crate::error::{Error, Result};
 use std::path::Path;
@@ -28,7 +29,7 @@ impl ClaudeRunner {
     /// Create a new ClaudeRunner with default model
     pub fn new() -> Self {
         Self {
-            model: "glm-5".to_string(),
+            model: Model::default_fast().to_string(),
             debug_mode: false,
         }
     }
@@ -36,6 +37,12 @@ impl ClaudeRunner {
     /// Set the model
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
+        self
+    }
+
+    /// Set the model from Model enum
+    pub fn with_model_enum(mut self, model: Model) -> Self {
+        self.model = model.to_string();
         self
     }
 
@@ -71,20 +78,17 @@ impl ClaudeRunner {
         // Build command
         let mut cmd = Command::new("claude");
         cmd.args(["--model", &self.model])
-            .args([
-                "--output-format",
-                if self.debug_mode {
-                    "stream-json"
-                } else {
-                    "json"
-                },
-            ])
+            .args(["--output-format", "json"])
             .arg("--dangerously-skip-permissions")
             .arg("-p")
             .current_dir(workdir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        if self.debug_mode {
+            cmd.arg("--verbose");
+        }
 
         if let Some(mcp) = mcp_config {
             if let Some(mcp_str) = mcp.to_str() {
@@ -195,10 +199,21 @@ fn parse_claude_result(output: &str) -> Result<ClaudeResult> {
         return Ok(result);
     }
 
-    Err(Error::ParseError(format!(
-        "No valid JSON result from Claude. Output: {}",
-        &output[..output.len().min(500)]
-    )))
+    // Try to find any JSON object in the output
+    if let Some(json) = find_json_object(output) {
+        if let Ok(result) = parse_result_json(&json) {
+            return Ok(result);
+        }
+    }
+
+    // If all parsing fails, return the raw output as the result
+    // This handles cases where Claude returns plain text instead of JSON
+    warn!(output_len = output.len(), "Could not parse JSON, returning raw output");
+    Ok(ClaudeResult {
+        text: output.to_string(),
+        is_error: false,
+        session_id: None,
+    })
 }
 
 /// Extract JSON from ```json code block
@@ -206,6 +221,31 @@ fn extract_json_from_code_block(text: &str) -> Option<String> {
     let re = regex::Regex::new(r"```json\s*(\{.*?\})\s*```").ok()?;
     let caps = re.captures(text)?;
     Some(caps[1].to_string())
+}
+
+/// Find any JSON object in text
+fn find_json_object(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let mut depth = 0;
+    let mut end = start;
+    for (i, c) in text[start..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 {
+        Some(text[start..end].to_string())
+    } else {
+        None
+    }
 }
 
 /// Parse a JSON string into ClaudeResult
@@ -275,7 +315,7 @@ mod tests {
     #[test]
     fn test_claude_runner_default() {
         let runner = ClaudeRunner::default();
-        assert_eq!(runner.model, "glm-5");
+        assert_eq!(runner.model, "haiku");
         assert!(!runner.debug_mode);
     }
 
@@ -283,6 +323,12 @@ mod tests {
     fn test_claude_runner_with_model() {
         let runner = ClaudeRunner::new().with_model("claude-3-opus");
         assert_eq!(runner.model, "claude-3-opus");
+    }
+
+    #[test]
+    fn test_claude_runner_with_model_enum() {
+        let runner = ClaudeRunner::new().with_model_enum(Model::Smart);
+        assert_eq!(runner.model, "sonnet");
     }
 
     #[test]
@@ -304,5 +350,25 @@ mod tests {
         let prompt = "This is a test prompt".to_string();
         let truncated = truncate_prompt_safely(&prompt, 5);
         assert!(truncated.contains("truncated"));
+    }
+
+    #[test]
+    fn test_find_json_object() {
+        let text = r#"Some text before {"result": "test", "is_error": false} some text after"#;
+        let json = find_json_object(text).unwrap();
+        assert!(json.contains("result"));
+    }
+
+    #[test]
+    fn test_find_json_object_nested() {
+        let text = r#"Outer {"inner": {"key": "value"}} text"#;
+        let json = find_json_object(text).unwrap();
+        assert!(json.contains("inner"));
+    }
+
+    #[test]
+    fn test_find_json_object_none() {
+        let text = "No JSON here";
+        assert!(find_json_object(text).is_none());
     }
 }
