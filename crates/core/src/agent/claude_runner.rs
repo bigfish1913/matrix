@@ -58,7 +58,11 @@ impl ClaudeRunner {
 
         // Truncate prompt if too long
         let prompt = if prompt.len() > MAX_PROMPT_LENGTH {
-            warn!(len = prompt.len(), max = MAX_PROMPT_LENGTH, "Prompt truncated");
+            warn!(
+                len = prompt.len(),
+                max = MAX_PROMPT_LENGTH,
+                "Prompt truncated"
+            );
             truncate_prompt_safely(prompt, MAX_PROMPT_LENGTH)
         } else {
             prompt.to_string()
@@ -67,7 +71,14 @@ impl ClaudeRunner {
         // Build command
         let mut cmd = Command::new("claude");
         cmd.args(["--model", &self.model])
-            .args(["--output-format", if self.debug_mode { "stream-json" } else { "json" }])
+            .args([
+                "--output-format",
+                if self.debug_mode {
+                    "stream-json"
+                } else {
+                    "json"
+                },
+            ])
             .arg("--dangerously-skip-permissions")
             .arg("-p")
             .current_dir(workdir)
@@ -88,19 +99,26 @@ impl ClaudeRunner {
         debug!(model = %self.model, "Calling Claude CLI");
 
         let result = timeout(timeout_duration, async {
-            let mut child = cmd.spawn()
+            let mut child = cmd
+                .spawn()
                 .map_err(|e| Error::ClaudeCli(format!("Failed to spawn: {}", e)))?;
 
             // Write prompt to stdin
             if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(prompt.as_bytes()).await
+                stdin
+                    .write_all(prompt.as_bytes())
+                    .await
                     .map_err(|e| Error::ClaudeCli(format!("Failed to write stdin: {}", e)))?;
-                stdin.shutdown().await
+                stdin
+                    .shutdown()
+                    .await
                     .map_err(|e| Error::ClaudeCli(format!("Failed to close stdin: {}", e)))?;
             }
 
             // Collect output
-            let output = child.wait_with_output().await
+            let output = child
+                .wait_with_output()
+                .await
                 .map_err(|e| Error::ClaudeCli(format!("Failed to wait: {}", e)))?;
 
             Ok::<_, Error>(output)
@@ -136,7 +154,10 @@ fn truncate_prompt_safely(prompt: &str, max_length: usize) -> String {
     // Ensure we have enough space for meaningful content
     if max_length <= marker_len + 10 {
         // Not enough space for structure, just truncate
-        return format!("... (truncated)\n{}", &prompt[prompt.len().saturating_sub(max_length.saturating_sub(15))..]);
+        return format!(
+            "... (truncated)\n{}",
+            &prompt[prompt.len().saturating_sub(max_length.saturating_sub(15))..]
+        );
     }
 
     let available = max_length.saturating_sub(marker_len);
@@ -192,9 +213,19 @@ fn parse_result_json(json: &str) -> Result<ClaudeResult> {
     let obj: serde_json::Value = serde_json::from_str(json)
         .map_err(|e| Error::ParseError(format!("JSON parse error: {}", e)))?;
 
-    let is_error = obj.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
-    let text = obj.get("result").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let session_id = obj.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let is_error = obj
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let text = obj
+        .get("result")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let session_id = obj
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     Ok(ClaudeResult {
         text,

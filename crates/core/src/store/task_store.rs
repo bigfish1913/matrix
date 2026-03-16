@@ -36,7 +36,8 @@ impl TaskStore {
     /// Load a task by ID
     pub async fn load_task(&self, id: &str) -> Result<Task> {
         let path = self.tasks_dir.join(format!("{}.json", id));
-        let content = fs::read_to_string(&path).await
+        let content = fs::read_to_string(&path)
+            .await
             .map_err(|e| Error::TaskNotFound(format!("{}: {}", id, e)))?;
         let task: Task = serde_json::from_str(&content)?;
         Ok(task)
@@ -51,7 +52,8 @@ impl TaskStore {
         while let Some(entry) = dir.next_entry().await? {
             let path = entry.path();
             if path.extension().map(|e| e == "json").unwrap_or(false)
-                && path.file_name()
+                && path
+                    .file_name()
                     .map(|n| n.to_string_lossy().starts_with("task-"))
                     .unwrap_or(false)
             {
@@ -74,7 +76,10 @@ impl TaskStore {
     /// Get pending tasks
     pub async fn pending_tasks(&self) -> Result<Vec<Task>> {
         let tasks = self.all_tasks().await?;
-        Ok(tasks.into_iter().filter(|t| t.status == TaskStatus::Pending).collect())
+        Ok(tasks
+            .into_iter()
+            .filter(|t| t.status == TaskStatus::Pending)
+            .collect())
     }
 
     /// Count tasks by status
@@ -109,13 +114,17 @@ impl TaskStore {
 
         // Detect cycles using DFS with coloring
         #[derive(Clone, Copy, PartialEq)]
-        enum Color { White, Grey, Black }
+        enum Color {
+            White,
+            Grey,
+            Black,
+        }
 
-        let mut colors: HashMap<String, Color> = tasks.iter()
-            .map(|t| (t.id.clone(), Color::White))
-            .collect();
+        let mut colors: HashMap<String, Color> =
+            tasks.iter().map(|t| (t.id.clone(), Color::White)).collect();
 
-        let dep_map: HashMap<String, Vec<String>> = tasks.iter()
+        let dep_map: HashMap<String, Vec<String>> = tasks
+            .iter()
             .map(|t| (t.id.clone(), t.depends_on.clone()))
             .collect();
 
@@ -137,7 +146,10 @@ impl TaskStore {
                         Some(Color::Grey) => {
                             let mut cycle: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
                             cycle.push(dep);
-                            warnings.push(format!("Circular dependency detected: {}", cycle.join(" -> ")));
+                            warnings.push(format!(
+                                "Circular dependency detected: {}",
+                                cycle.join(" -> ")
+                            ));
                         }
                         Some(Color::White) => {
                             let mut new_path = path.to_vec();
@@ -154,7 +166,13 @@ impl TaskStore {
 
         for task in &tasks {
             if colors.get(&task.id) == Some(&Color::White) {
-                dfs(&task.id, &[task.id.clone()], &mut colors, &dep_map, &mut warnings);
+                dfs(
+                    &task.id,
+                    std::slice::from_ref(&task.id),
+                    &mut colors,
+                    &dep_map,
+                    &mut warnings,
+                );
             }
         }
 
@@ -225,7 +243,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = TaskStore::new(dir.path().to_path_buf()).await.unwrap();
 
-        let task = Task::new("task-001".to_string(), "Test".to_string(), "Description".to_string());
+        let task = Task::new(
+            "task-001".to_string(),
+            "Test".to_string(),
+            "Description".to_string(),
+        );
         store.save_task(&task).await.unwrap();
 
         let loaded = store.load_task("task-001").await.unwrap();
@@ -238,8 +260,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = TaskStore::new(dir.path().to_path_buf()).await.unwrap();
 
-        let task1 = Task::new("task-001".to_string(), "Task 1".to_string(), "D1".to_string());
-        let task2 = Task::new("task-002".to_string(), "Task 2".to_string(), "D2".to_string());
+        let task1 = Task::new(
+            "task-001".to_string(),
+            "Task 1".to_string(),
+            "D1".to_string(),
+        );
+        let task2 = Task::new(
+            "task-002".to_string(),
+            "Task 2".to_string(),
+            "D2".to_string(),
+        );
         store.save_task(&task1).await.unwrap();
         store.save_task(&task2).await.unwrap();
 

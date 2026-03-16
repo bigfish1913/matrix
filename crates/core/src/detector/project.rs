@@ -76,7 +76,11 @@ impl ProjectDetector {
             return ProjectInfo {
                 project_type: ProjectType::Go,
                 package_manager: Some("go".to_string()),
-                install_command: Some(vec!["go".to_string(), "mod".to_string(), "download".to_string()]),
+                install_command: Some(vec![
+                    "go".to_string(),
+                    "mod".to_string(),
+                    "download".to_string(),
+                ]),
             };
         }
 
@@ -128,9 +132,19 @@ impl ProjectDetector {
 
     fn detect_python_install_command(workspace: &Path) -> Option<Vec<String>> {
         if workspace.join("requirements.txt").exists() {
-            Some(vec!["pip".to_string(), "install".to_string(), "-r".to_string(), "requirements.txt".to_string()])
+            Some(vec![
+                "pip".to_string(),
+                "install".to_string(),
+                "-r".to_string(),
+                "requirements.txt".to_string(),
+            ])
         } else if workspace.join("pyproject.toml").exists() {
-            Some(vec!["pip".to_string(), "install".to_string(), "-e".to_string(), ".".to_string()])
+            Some(vec![
+                "pip".to_string(),
+                "install".to_string(),
+                "-e".to_string(),
+                ".".to_string(),
+            ])
         } else {
             None
         }
@@ -145,10 +159,10 @@ fn has_files_matching(dir: &Path, pattern: &str) -> bool {
         .filter(|e| e.file_type().is_file())
         .any(|e| {
             if let Some(name) = e.file_name().to_str() {
-                if pattern.starts_with('*') {
-                    name.ends_with(&pattern[1..])
-                } else if pattern.ends_with('*') {
-                    name.starts_with(&pattern[..pattern.len() - 1])
+                if let Some(suffix) = pattern.strip_prefix('*') {
+                    name.ends_with(suffix)
+                } else if let Some(prefix) = pattern.strip_suffix('*') {
+                    name.starts_with(prefix)
                 } else {
                     name == pattern
                 }

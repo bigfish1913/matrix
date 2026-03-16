@@ -1,7 +1,7 @@
 //! Data models for tasks and manifests.
 
-mod task;
 mod manifest;
+mod task;
 
-pub use task::{Task, TaskStatus, Complexity};
 pub use manifest::Manifest;
+pub use task::{Complexity, Task, TaskStatus};

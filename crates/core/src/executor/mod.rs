@@ -2,4 +2,4 @@
 
 mod task_executor;
 
-pub use task_executor::{TaskExecutor, ExecutorConfig};
+pub use task_executor::{ExecutorConfig, TaskExecutor};

@@ -5,20 +5,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Task status enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    #[default]
     Pending,
     InProgress,
     Completed,
     Failed,
     Skipped,
-}
-
-impl Default for TaskStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for TaskStatus {
@@ -34,18 +29,13 @@ impl std::fmt::Display for TaskStatus {
 }
 
 /// Task complexity enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Complexity {
+    #[default]
     Unknown,
     Simple,
     Complex,
-}
-
-impl Default for Complexity {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// Task model
@@ -133,7 +123,13 @@ impl Task {
     }
 
     /// Create a subtask with parent reference
-    pub fn subtask(id: String, title: String, description: String, parent_id: String, depth: u32) -> Self {
+    pub fn subtask(
+        id: String,
+        title: String,
+        description: String,
+        parent_id: String,
+        depth: u32,
+    ) -> Self {
         let mut task = Self::new(id, title, description);
         task.parent_id = Some(parent_id);
         task.depth = depth;
@@ -147,7 +143,11 @@ mod tests {
 
     #[test]
     fn test_task_new() {
-        let task = Task::new("task-001".to_string(), "Test".to_string(), "Description".to_string());
+        let task = Task::new(
+            "task-001".to_string(),
+            "Test".to_string(),
+            "Description".to_string(),
+        );
         assert_eq!(task.id, "task-001");
         assert_eq!(task.title, "Test");
         assert_eq!(task.status, TaskStatus::Pending);
@@ -166,7 +166,11 @@ mod tests {
 
     #[test]
     fn test_task_serde() {
-        let task = Task::new("task-001".to_string(), "Test".to_string(), "Description".to_string());
+        let task = Task::new(
+            "task-001".to_string(),
+            "Test".to_string(),
+            "Description".to_string(),
+        );
         let json = serde_json::to_string(&task).unwrap();
         let parsed: Task = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, task.id);

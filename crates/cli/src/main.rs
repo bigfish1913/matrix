@@ -124,10 +124,16 @@ fn slugify(s: &str) -> String {
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect();
 
-    let slug: String = slug.split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-");
+    let slug: String = slug
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
 
     if slug.is_empty() {
-        chrono::Local::now().format("project-%Y%m%d-%H%M%S").to_string()
+        chrono::Local::now()
+            .format("project-%Y%m%d-%H%M%S")
+            .to_string()
     } else {
         slug.chars().take(40).collect()
     }
@@ -150,7 +156,10 @@ fn check_dependencies() -> anyhow::Result<()> {
     // Check hard dependencies
     for (cmd, install) in &hard_deps {
         if which::which(cmd).is_err() {
-            eprintln!("\x1b[31mError: '{}' not found. Install: {}\x1b[0m", cmd, install);
+            eprintln!(
+                "\x1b[31mError: '{}' not found. Install: {}\x1b[0m",
+                cmd, install
+            );
             anyhow::bail!("Missing required dependency: {}", cmd);
         }
     }

@@ -3,5 +3,5 @@
 mod project;
 mod test_runner;
 
-pub use project::{ProjectDetector, ProjectType, ProjectInfo};
-pub use test_runner::{TestRunnerDetector, TestRunner};
+pub use project::{ProjectDetector, ProjectInfo, ProjectType};
+pub use test_runner::{TestRunner, TestRunnerDetector};

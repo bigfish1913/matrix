@@ -71,8 +71,10 @@ impl AgentPool {
         if session_id.is_empty() {
             return;
         }
-        self.task_sessions.insert(task.id.clone(), session_id.to_string());
-        self.thread_sessions.insert(thread_name.to_string(), session_id.to_string());
+        self.task_sessions
+            .insert(task.id.clone(), session_id.to_string());
+        self.thread_sessions
+            .insert(thread_name.to_string(), session_id.to_string());
         debug!(task_id = %task.id, thread = %thread_name, "Session recorded");
     }
 
@@ -113,7 +115,10 @@ impl SharedAgentPool {
 
     /// Record a session
     pub async fn record(&self, task: &Task, session_id: &str, thread_name: &str) {
-        self.inner.lock().await.record(task, session_id, thread_name);
+        self.inner
+            .lock()
+            .await
+            .record(task, session_id, thread_name);
     }
 
     /// Clear a thread's session
@@ -144,7 +149,11 @@ mod tests {
         task.retries = 1;
         task.session_id = Some("session-123".to_string());
 
-        pool.record(&Task::new("other".into(), "O".into(), "D".into()), "session-456", "thread-1");
+        pool.record(
+            &Task::new("other".into(), "O".into(), "D".into()),
+            "session-456",
+            "thread-1",
+        );
 
         let session = pool.get_session(&task, "thread-1");
         assert_eq!(session, Some("session-123".to_string()));

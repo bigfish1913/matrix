@@ -48,6 +48,7 @@ impl OrchestratorConfig {
 pub struct Orchestrator {
     config: OrchestratorConfig,
     store: Arc<TaskStore>,
+    #[allow(dead_code)]
     agent_pool: SharedAgentPool,
     executor: Arc<TaskExecutor>,
     start_time: Option<Instant>,
@@ -103,9 +104,7 @@ impl Orchestrator {
         };
 
         // Phase 1: Generate or resume tasks
-        if self.config.resume && self.store.total().await? > 0 {
-            self.resume_tasks().await?;
-        } else if !self.config.resume && self.store.total().await? > 0 {
+        if self.store.total().await? > 0 {
             self.resume_tasks().await?;
         } else {
             self.generate_tasks(&clarification).await?;
@@ -149,16 +148,18 @@ Generate 3-5 concise, targeted clarifying questions.
 Respond ONLY with JSON:
 {{"questions": ["Question 1?", "Question 2?", "Question 3?"]}}"#,
             self.config.goal,
-            self.config.doc_content.as_ref().map(|d| format!("DOCUMENT:\n{}", d)).unwrap_or_default()
+            self.config
+                .doc_content
+                .as_ref()
+                .map(|d| format!("DOCUMENT:\n{}", d))
+                .unwrap_or_default()
         );
 
-        let result = self.executor.runner.call(
-            &prompt,
-            &self.config.workspace,
-            Some(120),
-            None,
-            None,
-        ).await?;
+        let result = self
+            .executor
+            .runner
+            .call(&prompt, &self.config.workspace, Some(120), None, None)
+            .await?;
 
         if result.is_error {
             warn!("Could not generate clarifying questions");
@@ -219,13 +220,11 @@ Generate 3-10 tasks. Respond ONLY with JSON:
             self.config.goal
         );
 
-        let result = self.executor.runner.call(
-            &prompt,
-            &self.config.workspace,
-            Some(120),
-            None,
-            None,
-        ).await?;
+        let result = self
+            .executor
+            .runner
+            .call(&prompt, &self.config.workspace, Some(120), None, None)
+            .await?;
 
         if result.is_error {
             error!(error = %result.text, "Failed to generate tasks");
@@ -271,19 +270,14 @@ Respond ONLY with JSON:
 {{"split": false, "reason": "..."}}
 OR if splitting needed:
 {{"split": true, "reason": "...", "subtasks": [{{"title": "...", "description": "..."}}]}}"#,
-            task.title,
-            task.description,
-            task.depth,
-            MAX_DEPTH
+            task.title, task.description, task.depth, MAX_DEPTH
         );
 
-        let result = self.executor.runner.call(
-            &prompt,
-            &self.config.workspace,
-            Some(120),
-            None,
-            None,
-        ).await?;
+        let result = self
+            .executor
+            .runner
+            .call(&prompt, &self.config.workspace, Some(120), None, None)
+            .await?;
 
         let data: AssessResponse = match serde_json::from_str(&result.text) {
             Ok(d) => d,
@@ -416,7 +410,7 @@ OR if splitting needed:
     }
 
     async fn run_dispatcher(&self) -> Result<()> {
-        let primary_slots = (self.config.num_agents + 1) / 2;
+        let primary_slots = self.config.num_agents.div_ceil(2);
         let subtask_slots = self.config.num_agents.saturating_sub(primary_slots);
         let deadline = Instant::now() + Duration::from_secs(24 * 3600);
 
@@ -446,13 +440,19 @@ OR if splitting needed:
             self.print_progress().await;
 
             // Get schedulable tasks
-            let completed_ids: HashSet<String> = self.store.all_tasks().await?
+            let completed_ids: HashSet<String> = self
+                .store
+                .all_tasks()
+                .await?
                 .into_iter()
                 .filter(|t| t.status == TaskStatus::Completed || t.status == TaskStatus::Skipped)
                 .map(|t| t.id)
                 .collect();
 
-            let pending: Vec<Task> = self.store.pending_tasks().await?
+            let pending: Vec<Task> = self
+                .store
+                .pending_tasks()
+                .await?
                 .into_iter()
                 .filter(|t| !dispatched_ids.contains(&t.id))
                 .filter(|t| t.depends_on.iter().all(|dep| completed_ids.contains(dep)))
@@ -551,7 +551,10 @@ OR if splitting needed:
 
         println!();
         println!("{}", "=".repeat(45));
-        println!("All tasks processed: {}/{} completed, {} failed", completed, total, failed);
+        println!(
+            "All tasks processed: {}/{} completed, {} failed",
+            completed, total, failed
+        );
         println!("{}", "=".repeat(45));
         println!();
 
@@ -672,6 +675,7 @@ struct ClarificationResponse {
 #[derive(Debug, serde::Deserialize)]
 struct AssessResponse {
     split: bool,
+    #[allow(dead_code)]
     reason: String,
     #[serde(default)]
     subtasks: Option<Vec<SubtaskDef>>,

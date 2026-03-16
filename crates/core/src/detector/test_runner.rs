@@ -159,7 +159,11 @@ mod tests {
     #[test]
     fn test_detect_npm_test() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("package.json"), r#"{"scripts": {"test": "jest"}}"#).unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts": {"test": "jest"}}"#,
+        )
+        .unwrap();
 
         let runner = TestRunnerDetector::detect(dir.path()).unwrap();
         assert_eq!(runner.name, "npm");

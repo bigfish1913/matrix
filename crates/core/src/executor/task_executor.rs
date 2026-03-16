@@ -2,8 +2,8 @@
 
 use crate::agent::{ClaudeRunner, SharedAgentPool};
 use crate::config::{MAX_PROMPT_LENGTH, MAX_WORKSPACE_FILES, TIMEOUT_EXEC};
-use crate::detector::TestRunnerDetector;
 use crate::detector::ProjectDetector;
+use crate::detector::TestRunnerDetector;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
 use crate::store::TaskStore;
@@ -55,8 +55,7 @@ impl TaskExecutor {
         agent_pool: SharedAgentPool,
         config: ExecutorConfig,
     ) -> Self {
-        let runner = ClaudeRunner::new()
-            .with_debug(config.debug_mode);
+        let runner = ClaudeRunner::new().with_debug(config.debug_mode);
 
         Self {
             workspace,
@@ -136,7 +135,8 @@ impl TaskExecutor {
     async fn run_install_command_in_subdir(&self, cmd: &[String], subdir: &str) -> Result<()> {
         let shell_cmd = format!("cd {} && {}", subdir, cmd.join(" "));
 
-        self.run_install_command(&["sh".to_string(), "-c".to_string(), shell_cmd]).await
+        self.run_install_command(&["sh".to_string(), "-c".to_string(), shell_cmd])
+            .await
     }
 
     /// Execute a task
@@ -163,13 +163,16 @@ impl TaskExecutor {
         self.store.save_task(task).await?;
 
         // Call Claude
-        let result = self.runner.call(
-            &prompt,
-            &self.workspace,
-            Some(TIMEOUT_EXEC),
-            self.config.mcp_config.as_deref(),
-            resume_sid.as_deref(),
-        ).await;
+        let result = self
+            .runner
+            .call(
+                &prompt,
+                &self.workspace,
+                Some(TIMEOUT_EXEC),
+                self.config.mcp_config.as_deref(),
+                resume_sid.as_deref(),
+            )
+            .await;
 
         match result {
             Ok(claude_result) if claude_result.is_error => {
@@ -256,12 +259,13 @@ TEST FAILURES:
 
 Fix the failing tests. Make minimal, targeted changes.
 Respond with a brief summary of what you fixed."#,
-            task.title,
-            task.description,
-            test_output
+            task.title, task.description, test_output
         );
 
-        let result = self.runner.call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None).await?;
+        let result = self
+            .runner
+            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None)
+            .await?;
 
         if result.is_error {
             warn!(error = %result.text, "Fix attempt failed");
@@ -321,7 +325,10 @@ Implement the task now. Work directly in the workspace directory."#,
 
     fn doc_section(&self) -> String {
         if let Some(doc) = &self.config.doc_content {
-            format!("\nREFERENCE DOCUMENT:\n{}\n", doc.chars().take(5000).collect::<String>())
+            format!(
+                "\nREFERENCE DOCUMENT:\n{}\n",
+                doc.chars().take(5000).collect::<String>()
+            )
         } else {
             String::new()
         }
@@ -331,7 +338,10 @@ Implement the task now. Work directly in the workspace directory."#,
         let memory_path = self.workspace.join(".claude").join("memory.md");
         if let Ok(content) = std::fs::read_to_string(&memory_path) {
             if content.len() > 100 {
-                return format!("\nPROJECT MEMORY:\n{}\n", content.chars().take(3000).collect::<String>());
+                return format!(
+                    "\nPROJECT MEMORY:\n{}\n",
+                    content.chars().take(3000).collect::<String>()
+                );
             }
         }
         String::new()
@@ -365,7 +375,11 @@ Implement the task now. Work directly in the workspace directory."#,
         files.sort();
 
         if files.len() > limit {
-            format!("{}\n... ({} more files)", files[..limit].join("\n"), files.len() - limit)
+            format!(
+                "{}\n... ({} more files)",
+                files[..limit].join("\n"),
+                files.len() - limit
+            )
         } else if files.is_empty() {
             "(empty)".to_string()
         } else {
@@ -415,9 +429,12 @@ Implement the task now. Work directly in the workspace directory."#,
         before: &HashMap<String, SystemTime>,
         after: &HashMap<String, SystemTime>,
     ) -> Vec<String> {
-        after.iter()
+        after
+            .iter()
             .filter(|(path, mtime)| {
-                before.get(*path).map_or(true, |old_mtime| old_mtime < *mtime)
+                before
+                    .get(*path)
+                    .is_none_or(|old_mtime| old_mtime < *mtime)
             })
             .map(|(path, _)| path.clone())
             .collect()
