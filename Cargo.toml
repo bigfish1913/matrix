@@ -47,3 +47,6 @@ tempfile = "3"
 
 # 内部 crate
 matrix-core = { path = "crates/core" }
+
+# 依赖检查
+which = "6"
