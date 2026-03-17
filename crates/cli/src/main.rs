@@ -188,6 +188,13 @@ async fn run_tui_loop(
     let mut orchestrator_handle = std::pin::pin!(orchestrator_handle);
     let mut terminal = terminal;
     let mut orchestrator_completed = false;
+    let mut last_redraw = std::time::Instant::now();
+    let redraw_interval = std::time::Duration::from_millis(500); // Redraw max 2x/sec for time updates
+
+    // Initial draw
+    terminal.draw(|frame| {
+        render_app(frame, app);
+    })?;
 
     while app.running {
         // Wait for next event
@@ -197,11 +204,19 @@ async fn run_tui_loop(
                 match event {
                     TuiEvent::Key(key) => {
                         app.handle_key(key);
+                        // Redraw immediately on key press
+                        terminal.draw(|frame| {
+                            render_app(frame, app);
+                        })?;
                     }
                     TuiEvent::Tick => {
-                        // Poll orchestrator events and redraw if needed
+                        // Poll orchestrator events
                         let had_events = app.poll_events_count() > 0;
-                        if had_events || app.start_time.is_some() {
+                        let should_redraw = had_events
+                            || last_redraw.elapsed() > redraw_interval;
+
+                        if should_redraw {
+                            last_redraw = std::time::Instant::now();
                             terminal.draw(|frame| {
                                 render_app(frame, app);
                             })?;
