@@ -74,10 +74,12 @@ pub struct TuiApp {
     pub output_lines: Vec<OutputLine>,
     pub output_scroll: usize,
     pub output_task_id: Option<String>,
+    pub output_auto_follow: bool,  // Auto-scroll to bottom on new output
 
     // Logs
     pub log_buffer: LogBuffer,
     pub logs_scroll: usize,
+    pub logs_auto_follow: bool,  // Auto-scroll to bottom on new logs
 
     // Verbosity
     pub verbosity: VerbosityLevel,
@@ -108,8 +110,10 @@ impl TuiApp {
             output_lines: Vec::new(),
             output_scroll: 0,
             output_task_id: None,
+            output_auto_follow: true,  // Start with auto-follow enabled
             log_buffer: LogBuffer::default(),
             logs_scroll: 0,
+            logs_auto_follow: true,  // Start with auto-follow enabled
             verbosity,
             event_receiver: None,
             show_help: false,
@@ -164,8 +168,14 @@ impl TuiApp {
     fn reset_scroll(&mut self) {
         match self.current_tab {
             Tab::Tasks => self.tasks_scroll = 0,
-            Tab::Output => self.output_scroll = 0,
-            Tab::Logs => self.logs_scroll = 0,
+            Tab::Output => {
+                self.output_scroll = 0;
+                self.output_auto_follow = true;
+            }
+            Tab::Logs => {
+                self.logs_scroll = 0;
+                self.logs_auto_follow = true;
+            }
         }
     }
 
@@ -180,11 +190,15 @@ impl TuiApp {
                 if self.output_scroll > 0 {
                     self.output_scroll -= 1;
                 }
+                // User manually scrolled up, disable auto-follow
+                self.output_auto_follow = false;
             }
             Tab::Logs => {
                 if self.logs_scroll > 0 {
                     self.logs_scroll -= 1;
                 }
+                // User manually scrolled up, disable auto-follow
+                self.logs_auto_follow = false;
             }
         }
     }
@@ -197,14 +211,24 @@ impl TuiApp {
                 }
             }
             Tab::Output => {
-                if self.output_scroll < self.output_lines.len().saturating_sub(1) {
+                let max_scroll = self.output_lines.len().saturating_sub(1);
+                if self.output_scroll < max_scroll {
                     self.output_scroll += 1;
+                }
+                // If scrolled to bottom, re-enable auto-follow
+                if self.output_scroll >= max_scroll {
+                    self.output_auto_follow = true;
                 }
             }
             Tab::Logs => {
                 let entries = self.log_buffer.get_entries();
-                if self.logs_scroll < entries.len().saturating_sub(1) {
+                let max_scroll = entries.len().saturating_sub(1);
+                if self.logs_scroll < max_scroll {
                     self.logs_scroll += 1;
+                }
+                // If scrolled to bottom, re-enable auto-follow
+                if self.logs_scroll >= max_scroll {
+                    self.logs_auto_follow = true;
                 }
             }
         }
@@ -255,27 +279,44 @@ impl TuiApp {
                 if self.verbosity == VerbosityLevel::Verbose {
                     self.output_task_id = Some(task_id);
                     self.output_lines.push(OutputLine::Thinking { content });
+                    if self.output_auto_follow {
+                        self.output_scroll = self.output_lines.len().saturating_sub(1);
+                    }
                 }
             }
             Event::ClaudeToolUse { task_id, tool_name, tool_input } => {
                 self.output_task_id = Some(task_id);
                 if self.verbosity >= VerbosityLevel::Normal {
                     self.output_lines.push(OutputLine::ToolUse { tool_name, tool_input });
+                    if self.output_auto_follow {
+                        self.output_scroll = self.output_lines.len().saturating_sub(1);
+                    }
                 }
             }
             Event::ClaudeToolResult { task_id, tool_name, result, success } => {
                 self.output_task_id = Some(task_id);
                 if self.verbosity >= VerbosityLevel::Normal {
                     self.output_lines.push(OutputLine::ToolResult { tool_name, result, success });
+                    if self.output_auto_follow {
+                        self.output_scroll = self.output_lines.len().saturating_sub(1);
+                    }
                 }
             }
             Event::ClaudeResult { task_id, result } => {
                 self.output_task_id = Some(task_id);
                 self.output_lines.push(OutputLine::Result { content: result });
+                if self.output_auto_follow {
+                    self.output_scroll = self.output_lines.len().saturating_sub(1);
+                }
             }
             Event::Log { timestamp, level, message } => {
                 self.log_buffer.push(level, message);
                 let _ = timestamp; // LogEntry uses Utc::now()
+                // Auto-scroll to bottom if auto-follow is enabled
+                if self.logs_auto_follow {
+                    let entries = self.log_buffer.get_entries();
+                    self.logs_scroll = entries.len().saturating_sub(1);
+                }
             }
             Event::ExecutionStateChanged { state } => {
                 self.state = state;
@@ -306,6 +347,21 @@ impl TuiApp {
         for event in events {
             self.process_event(event);
         }
+    }
+
+    /// Try to receive and process events, returning count of processed events
+    pub fn poll_events_count(&mut self) -> usize {
+        // Collect all events first to avoid borrowing issues
+        let events: Vec<Event> = if let Some(ref mut receiver) = self.event_receiver {
+            std::iter::from_fn(|| receiver.try_recv().ok()).collect()
+        } else {
+            Vec::new()
+        };
+        let count = events.len();
+        for event in events {
+            self.process_event(event);
+        }
+        count
     }
 
     /// Get elapsed time as formatted string

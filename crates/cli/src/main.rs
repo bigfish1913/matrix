@@ -186,15 +186,12 @@ async fn run_tui_loop(
     let mut orchestrator_handle = std::pin::pin!(orchestrator_handle);
     let mut terminal = terminal;
     let mut orchestrator_completed = false;
+    let mut last_tick = std::time::Instant::now();
+    let tick_interval = std::time::Duration::from_secs(1);  // Only redraw on tick every 1s
 
     while app.running {
-        // Poll orchestrator events
-        app.poll_events();
-
-        // Draw UI
-        terminal.draw(|frame| {
-            render_app(frame, app);
-        })?;
+        // Poll orchestrator events (may trigger redraw via auto-follow)
+        let had_events = app.poll_events_count() > 0;
 
         // Wait for next event
         tokio::select! {
@@ -203,9 +200,25 @@ async fn run_tui_loop(
                 match event {
                     TuiEvent::Key(key) => {
                         app.handle_key(key);
+                        // Redraw after keyboard input
+                        terminal.draw(|frame| {
+                            render_app(frame, app);
+                        })?;
                     }
                     TuiEvent::Tick => {
-                        // Update UI on tick
+                        // Only redraw on tick if:
+                        // 1. It's been more than 1 second since last tick redraw, OR
+                        // 2. We're running (need to update elapsed time)
+                        let now = std::time::Instant::now();
+                        let need_redraw = app.start_time.is_some() &&
+                            (now.duration_since(last_tick) >= tick_interval || had_events);
+
+                        if need_redraw {
+                            terminal.draw(|frame| {
+                                render_app(frame, app);
+                            })?;
+                            last_tick = now;
+                        }
                     }
                     _ => {}
                 }
@@ -217,16 +230,26 @@ async fn run_tui_loop(
                     Ok(Ok(())) => {
                         info!("Orchestrator completed successfully");
                         orchestrator_completed = true;
+                        // Redraw final state
+                        terminal.draw(|frame| {
+                            render_app(frame, app);
+                        })?;
                         // Don't exit immediately - let user see the results
                         // User can press 'q' to exit
                     }
                     Ok(Err(e)) => {
                         tracing::error!("Orchestrator failed: {}", e);
                         orchestrator_completed = true;
+                        terminal.draw(|frame| {
+                            render_app(frame, app);
+                        })?;
                     }
                     Err(e) => {
                         tracing::error!("Orchestrator task panicked: {}", e);
                         orchestrator_completed = true;
+                        terminal.draw(|frame| {
+                            render_app(frame, app);
+                        })?;
                     }
                 }
             }
