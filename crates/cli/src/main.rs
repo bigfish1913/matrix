@@ -77,22 +77,24 @@ fn get_verbosity(args: &Args) -> VerbosityLevel {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logging
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "matrix=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
+    // Parse args first to determine if TUI mode is enabled
     let args = Args::parse();
+    let use_tui = !args.no_tui && std::io::stdout().is_terminal();
+
+    // For non-TUI mode, initialize tracing immediately
+    // For TUI mode, tracing will be initialized later with TuiLogLayer
+    if !use_tui {
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "matrix=info".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
     // Check runtime dependencies
     check_dependencies()?;
-
-    // Determine if TUI should be used
-    let use_tui = !args.no_tui && std::io::stdout().is_terminal();
 
     if use_tui {
         run_with_tui(&args).await
@@ -103,13 +105,25 @@ async fn main() -> anyhow::Result<()> {
 
 /// Run with TUI mode
 async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
-    use matrix_core::tui::{create_event_channel, init_terminal, restore_terminal, LogBuffer};
+    use matrix_core::tui::{
+        create_event_channel, init_terminal, restore_terminal, LogBuffer, TuiLogLayer,
+    };
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     // Initialize terminal
     let terminal = init_terminal()?;
 
     // Create event channel for orchestrator -> TUI communication
     let (event_sender, event_receiver) = create_event_channel();
+
+    // Initialize tracing with TuiLogLayer to send logs to TUI
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "matrix=info".into()),
+        )
+        .with(TuiLogLayer::new(event_sender.clone()))
+        .init();
 
     // Create log buffer for shared logging
     let log_buffer = LogBuffer::new(1000);
