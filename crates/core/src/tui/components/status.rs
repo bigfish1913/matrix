@@ -12,6 +12,7 @@ pub struct StatusBar;
 
 impl StatusBar {
     /// Render status bar
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         state: ExecutionState,
         current_task: Option<&str>,

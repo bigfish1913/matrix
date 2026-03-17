@@ -104,7 +104,7 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     use matrix_core::tui::{create_event_channel, init_terminal, restore_terminal, LogBuffer};
 
     // Initialize terminal
-    let mut terminal = init_terminal()?;
+    let terminal = init_terminal()?;
 
     // Create event channel for orchestrator -> TUI communication
     let (event_sender, event_receiver) = create_event_channel();
@@ -127,7 +127,8 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     // Load document content
     let doc_content = if let Some(doc_path) = &args.doc {
         if !doc_path.exists() {
-            restore_terminal(terminal)?;
+            // Restore terminal before exiting
+            let _ = restore_terminal(terminal);
             anyhow::bail!("Document not found: {}", doc_path.display());
         }
         let content = std::fs::read_to_string(doc_path)?;
@@ -158,20 +159,24 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     });
 
     // Run TUI event loop
-    run_tui_loop(&mut terminal, &mut app, orchestrator_handle).await?;
+    let result = run_tui_loop(terminal, &mut app, orchestrator_handle).await;
 
-    // Restore terminal
-    restore_terminal(terminal)?;
+    // Restore terminal (always, even on error)
+    // Note: terminal is moved back from run_tui_loop on completion
+    if let Ok((terminal, _)) = result {
+        let _ = restore_terminal(terminal);
+    }
 
     Ok(())
 }
 
 /// Run TUI event loop
+/// Returns the terminal so it can be properly restored
 async fn run_tui_loop(
-    terminal: &mut MatrixTerminal,
+    terminal: MatrixTerminal,
     app: &mut TuiApp,
     orchestrator_handle: tokio::task::JoinHandle<anyhow::Result<()>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<(MatrixTerminal, bool)> {
     use matrix_core::tui::event_stream;
     use matrix_core::TuiEvent;
     use std::pin::pin;
@@ -179,6 +184,8 @@ async fn run_tui_loop(
     let events = event_stream();
     let mut events = pin!(events);
     let mut orchestrator_handle = std::pin::pin!(orchestrator_handle);
+    let mut terminal = terminal;
+    let mut orchestrator_completed = false;
 
     while app.running {
         // Poll orchestrator events
@@ -209,22 +216,24 @@ async fn run_tui_loop(
                 match result {
                     Ok(Ok(())) => {
                         info!("Orchestrator completed successfully");
-                        app.running = false;
+                        orchestrator_completed = true;
+                        // Don't exit immediately - let user see the results
+                        // User can press 'q' to exit
                     }
                     Ok(Err(e)) => {
                         tracing::error!("Orchestrator failed: {}", e);
-                        app.running = false;
+                        orchestrator_completed = true;
                     }
                     Err(e) => {
                         tracing::error!("Orchestrator task panicked: {}", e);
-                        app.running = false;
+                        orchestrator_completed = true;
                     }
                 }
             }
         }
     }
 
-    Ok(())
+    Ok((terminal, orchestrator_completed))
 }
 
 /// Run with simple output (no TUI)

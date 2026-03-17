@@ -51,8 +51,7 @@ impl TasksPanel {
     pub fn render(tasks: &[TaskDisplay], selected: usize) -> (List<'_>, ListState) {
         let items: Vec<ListItem> = tasks
             .iter()
-            .enumerate()
-            .map(|(_i, task)| {
+            .map(|task| {
                 let icon = Self::status_icon(task.status);
                 let color = Self::status_color(task.status);
                 let duration = Self::format_duration(task.duration);
