@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::models::{Complexity, Task, TaskStatus};
 use crate::store::TaskStore;
+use crate::tui::{Event, EventSender, ExecutionState};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ pub struct OrchestratorConfig {
     pub debug_mode: bool,
     pub ask_mode: bool,
     pub resume: bool,
+    pub event_sender: Option<EventSender>,
 }
 
 impl OrchestratorConfig {
@@ -40,6 +42,7 @@ impl OrchestratorConfig {
             debug_mode: false,
             ask_mode: false,
             resume: false,
+            event_sender: None,
         }
     }
 }
@@ -88,6 +91,13 @@ impl Orchestrator {
         })
     }
 
+    /// Emit an event to the TUI if a sender is configured
+    fn emit_event(&self, event: Event) {
+        if let Some(ref sender) = self.config.event_sender {
+            let _ = sender.send(event);
+        }
+    }
+
     /// Run the orchestrator
     pub async fn run(&mut self) -> Result<()> {
         self.start_time = Some(Instant::now());
@@ -107,8 +117,22 @@ impl Orchestrator {
         if self.store.total().await? > 0 {
             self.resume_tasks().await?;
         } else {
+            // Emit Generating state before task generation
+            self.emit_event(Event::ExecutionStateChanged {
+                state: ExecutionState::Generating,
+            });
             self.generate_tasks(&clarification).await?;
         }
+
+        // Emit Running state after tasks are generated/resumed
+        self.emit_event(Event::ExecutionStateChanged {
+            state: ExecutionState::Running,
+        });
+
+        // Emit model info
+        self.emit_event(Event::ModelChanged {
+            model: "glm-5".to_string(),
+        });
 
         // Show progress
         self.print_progress().await;
@@ -121,6 +145,11 @@ impl Orchestrator {
 
         // Final summary
         self.print_summary().await?;
+
+        // Emit Completed state
+        self.emit_event(Event::ExecutionStateChanged {
+            state: ExecutionState::Completed,
+        });
 
         Ok(())
     }
@@ -261,9 +290,15 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
                 info!(count = tasks_response.tasks.len(), "Tasks generated");
 
                 for t in tasks_response.tasks {
-                    let mut task = Task::new(t.id, t.title, t.description);
+                    let mut task = Task::new(t.id, t.title.clone(), t.description);
                     task.depends_on = t.depends_on;
                     self.store.save_task(&task).await?;
+
+                    // Emit TaskCreated event
+                    self.emit_event(Event::TaskCreated {
+                        id: task.id.clone(),
+                        title: task.title.clone(),
+                    });
                 }
 
                 self.store.save_manifest(&self.config.goal).await?;
@@ -506,9 +541,10 @@ OR if splitting needed:
                 let store = self.store.clone();
                 let executor = self.executor.clone();
                 let task = task.clone();
+                let event_sender = self.config.event_sender.clone();
 
                 join_set.spawn(async move {
-                    let _ = run_task_pipeline(store, executor, task).await;
+                    let _ = run_task_pipeline(store, executor, task, event_sender).await;
                     (task_id, 0usize)
                 });
             }
@@ -528,9 +564,10 @@ OR if splitting needed:
                 let store = self.store.clone();
                 let executor = self.executor.clone();
                 let task = task.clone();
+                let event_sender = self.config.event_sender.clone();
 
                 join_set.spawn(async move {
-                    let _ = run_task_pipeline(store, executor, task).await;
+                    let _ = run_task_pipeline(store, executor, task, event_sender).await;
                     (task_id, 1usize)
                 });
             }
@@ -597,8 +634,17 @@ async fn run_task_pipeline(
     store: Arc<TaskStore>,
     executor: Arc<TaskExecutor>,
     mut task: Task,
+    event_sender: Option<EventSender>,
 ) -> Result<()> {
     let thread_name = format!("thread-{}", task.id);
+
+    // Emit InProgress status
+    if let Some(ref sender) = event_sender {
+        let _ = sender.send(Event::TaskStatusChanged {
+            id: task.id.clone(),
+            status: TaskStatus::InProgress,
+        });
+    }
 
     // Execute
     let success = executor.execute(&mut task, &thread_name).await?;
@@ -613,6 +659,13 @@ async fn run_task_pipeline(
             task.status = TaskStatus::Failed;
             store.save_task(&task).await?;
             error!(task_id = %task.id, "Permanently failed");
+            // Emit Failed status
+            if let Some(ref sender) = event_sender {
+                let _ = sender.send(Event::TaskStatusChanged {
+                    id: task.id.clone(),
+                    status: TaskStatus::Failed,
+                });
+            }
         }
         return Ok(());
     }
@@ -636,6 +689,13 @@ async fn run_task_pipeline(
             task.error = Some(format!("Tests failed: {}", test_output));
             store.save_task(&task).await?;
             error!(task_id = %task.id, "Tests failed permanently");
+            // Emit Failed status
+            if let Some(ref sender) = event_sender {
+                let _ = sender.send(Event::TaskStatusChanged {
+                    id: task.id.clone(),
+                    status: TaskStatus::Failed,
+                });
+            }
             return Ok(());
         }
     }
@@ -644,6 +704,14 @@ async fn run_task_pipeline(
     task.status = TaskStatus::Completed;
     store.save_task(&task).await?;
     info!(task_id = %task.id, "Task completed successfully");
+
+    // Emit Completed status
+    if let Some(ref sender) = event_sender {
+        let _ = sender.send(Event::TaskStatusChanged {
+            id: task.id.clone(),
+            status: TaskStatus::Completed,
+        });
+    }
 
     Ok(())
 }

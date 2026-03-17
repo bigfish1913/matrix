@@ -138,8 +138,6 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     };
 
     // Create config
-    // Note: event_sender will be added to OrchestratorConfig in Task 7.1
-    let _event_sender = event_sender; // Keep alive for now, will be used later
     let config = OrchestratorConfig {
         goal: args.goal.clone(),
         workspace,
@@ -150,6 +148,7 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
         debug_mode: args.debug,
         ask_mode: args.ask,
         resume: args.resume,
+        event_sender: Some(event_sender),
     };
 
     // Spawn orchestrator as background task
@@ -257,6 +256,7 @@ async fn run_simple(args: &Args) -> anyhow::Result<()> {
         debug_mode: args.debug,
         ask_mode: args.ask,
         resume: args.resume,
+        event_sender: None,
     };
 
     // Run orchestrator
