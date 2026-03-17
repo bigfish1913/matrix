@@ -20,4 +20,6 @@ pub use executor::{ExecutorConfig, TaskExecutor};
 pub use models::{Complexity, Manifest, Task, TaskStatus};
 pub use orchestrator::{Orchestrator, OrchestratorConfig};
 pub use store::TaskStore;
-pub use tui::{Event, TuiApp, TuiEvent, VerbosityLevel};
+pub use tui::{
+    render_app, Event, EventSender, LogBuffer, MatrixTerminal, TuiApp, TuiEvent, VerbosityLevel,
+};

@@ -1,7 +1,11 @@
 //! Matrix CLI - Command-line interface for the Agent Orchestrator
 
 use clap::Parser;
-use matrix_core::{Orchestrator, OrchestratorConfig};
+use futures::StreamExt;
+use matrix_core::{
+    render_app, MatrixTerminal, Orchestrator, OrchestratorConfig, TuiApp, VerbosityLevel,
+};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -44,6 +48,29 @@ struct Args {
     /// Ask clarifying questions before planning
     #[arg(short, long)]
     ask: bool,
+
+    /// Disable TUI mode, use simple output
+    #[arg(long)]
+    no_tui: bool,
+
+    /// Quiet mode: minimal output
+    #[arg(short, long)]
+    quiet: bool,
+
+    /// Verbose mode: detailed Claude output
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+/// Determine verbosity level from CLI args
+fn get_verbosity(args: &Args) -> VerbosityLevel {
+    if args.quiet {
+        VerbosityLevel::Quiet
+    } else if args.verbose {
+        VerbosityLevel::Verbose
+    } else {
+        VerbosityLevel::Normal
+    }
 }
 
 #[tokio::main]
@@ -62,8 +89,149 @@ async fn main() -> anyhow::Result<()> {
     // Check runtime dependencies
     check_dependencies()?;
 
+    // Determine if TUI should be used
+    let use_tui = !args.no_tui && std::io::stdout().is_terminal();
+
+    if use_tui {
+        run_with_tui(&args).await
+    } else {
+        run_simple(&args).await
+    }
+}
+
+/// Run with TUI mode
+async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
+    use matrix_core::tui::{create_event_channel, init_terminal, restore_terminal, LogBuffer};
+
+    // Initialize terminal
+    let mut terminal = init_terminal()?;
+
+    // Create event channel for orchestrator -> TUI communication
+    let (event_sender, event_receiver) = create_event_channel();
+
+    // Create log buffer for shared logging
+    let log_buffer = LogBuffer::new(1000);
+
+    // Get verbosity level
+    let verbosity = get_verbosity(args);
+
+    // Create TUI app
+    let mut app = TuiApp::new(verbosity)
+        .with_event_receiver(event_receiver)
+        .with_log_buffer(log_buffer.clone());
+
     // Resolve workspace path
-    let workspace = resolve_workspace(&args)?;
+    let workspace = resolve_workspace(args)?;
+    let tasks_dir = workspace.join(".matrix").join("tasks");
+
+    // Load document content
+    let doc_content = if let Some(doc_path) = &args.doc {
+        if !doc_path.exists() {
+            restore_terminal(terminal)?;
+            anyhow::bail!("Document not found: {}", doc_path.display());
+        }
+        let content = std::fs::read_to_string(doc_path)?;
+        info!(lines = content.lines().count(), "Loaded document");
+        Some(content)
+    } else {
+        None
+    };
+
+    // Create config
+    // Note: event_sender will be added to OrchestratorConfig in Task 7.1
+    let _event_sender = event_sender; // Keep alive for now, will be used later
+    let config = OrchestratorConfig {
+        goal: args.goal.clone(),
+        workspace,
+        tasks_dir,
+        doc_content,
+        mcp_config: args.mcp_config.clone(),
+        num_agents: args.agents,
+        debug_mode: args.debug,
+        ask_mode: args.ask,
+        resume: args.resume,
+    };
+
+    // Spawn orchestrator as background task
+    let orchestrator_handle = tokio::spawn(async move {
+        let mut orchestrator = Orchestrator::new(config).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        orchestrator.run().await.map_err(|e| anyhow::anyhow!("{}", e))
+    });
+
+    // Run TUI event loop
+    run_tui_loop(&mut terminal, &mut app, orchestrator_handle).await?;
+
+    // Restore terminal
+    restore_terminal(terminal)?;
+
+    Ok(())
+}
+
+/// Run TUI event loop
+async fn run_tui_loop(
+    terminal: &mut MatrixTerminal,
+    app: &mut TuiApp,
+    orchestrator_handle: tokio::task::JoinHandle<anyhow::Result<()>>,
+) -> anyhow::Result<()> {
+    use matrix_core::tui::event_stream;
+    use matrix_core::TuiEvent;
+    use std::pin::pin;
+
+    let events = event_stream();
+    let mut events = pin!(events);
+    let mut orchestrator_handle = std::pin::pin!(orchestrator_handle);
+
+    while app.running {
+        // Poll orchestrator events
+        app.poll_events();
+
+        // Draw UI
+        terminal.draw(|frame| {
+            render_app(frame, app);
+        })?;
+
+        // Wait for next event
+        tokio::select! {
+            // TUI keyboard/tick events
+            Some(event) = events.next() => {
+                match event {
+                    TuiEvent::Key(key) => {
+                        app.handle_key(key);
+                    }
+                    TuiEvent::Tick => {
+                        // Update UI on tick
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check if orchestrator finished
+            result = &mut orchestrator_handle => {
+                match result {
+                    Ok(Ok(())) => {
+                        info!("Orchestrator completed successfully");
+                        app.running = false;
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!("Orchestrator failed: {}", e);
+                        app.running = false;
+                    }
+                    Err(e) => {
+                        tracing::error!("Orchestrator task panicked: {}", e);
+                        app.running = false;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Run with simple output (no TUI)
+async fn run_simple(args: &Args) -> anyhow::Result<()> {
+    // Resolve workspace path
+    let workspace = resolve_workspace(args)?;
     let tasks_dir = workspace.join(".matrix").join("tasks");
 
     // Load document content
@@ -84,7 +252,7 @@ async fn main() -> anyhow::Result<()> {
         workspace,
         tasks_dir,
         doc_content,
-        mcp_config: args.mcp_config,
+        mcp_config: args.mcp_config.clone(),
         num_agents: args.agents,
         debug_mode: args.debug,
         ask_mode: args.ask,

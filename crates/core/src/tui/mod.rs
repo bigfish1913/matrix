@@ -72,5 +72,5 @@ impl Default for LogBuffer {
 
 pub use app::TuiApp;
 pub use event::{Event, ExecutionState, Key, LogLevel, TuiEvent, VerbosityLevel};
-pub use render::MatrixTerminal;
+pub use render::{render_app, MatrixTerminal};
 pub use terminal::{event_stream, init_terminal, restore_terminal};
