@@ -15,15 +15,6 @@ pub type MatrixTerminal = Terminal<CrosstermBackend<std::io::Stdout>>;
 
 /// Render the TUI
 pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
-    // Update scroll positions for auto-follow
-    if app.logs_auto_follow {
-        let entries = app.log_buffer.get_entries();
-        app.logs_scroll = entries.len().saturating_sub(1);
-    }
-    if app.output_auto_follow {
-        app.output_scroll = app.output_lines.len().saturating_sub(1);
-    }
-
     // Create main layout: tab switcher + main content + status bar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -45,17 +36,29 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
             frame.render_stateful_widget(list, chunks[1], &mut state.clone());
         }
         crate::tui::app::Tab::Output => {
+            // Calculate scroll for auto-follow
+            let scroll = if app.output_auto_follow {
+                app.output_lines.len() as u16  // Scroll to bottom
+            } else {
+                app.output_scroll
+            };
             let paragraph = OutputPanel::render(
                 &app.output_lines,
                 app.output_task_id.as_deref(),
                 app.verbosity,
-                app.output_scroll,
+                scroll,
             );
             frame.render_widget(paragraph, chunks[1]);
         }
         crate::tui::app::Tab::Logs => {
+            // Calculate scroll for auto-follow
             let entries = app.log_buffer.get_entries();
-            let paragraph = LogsPanel::render(&entries, app.logs_scroll);
+            let scroll = if app.logs_auto_follow {
+                entries.len() as u16  // Scroll to bottom
+            } else {
+                app.logs_scroll
+            };
+            let paragraph = LogsPanel::render(&entries, scroll);
             frame.render_widget(paragraph, chunks[1]);
         }
     }

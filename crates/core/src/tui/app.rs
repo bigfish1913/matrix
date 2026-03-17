@@ -72,13 +72,13 @@ pub struct TuiApp {
 
     // Claude output
     pub output_lines: Vec<OutputLine>,
-    pub output_scroll: usize,
+    pub output_scroll: u16,
     pub output_task_id: Option<String>,
     pub output_auto_follow: bool,  // Auto-scroll to bottom on new output
 
     // Logs
     pub log_buffer: LogBuffer,
-    pub logs_scroll: usize,
+    pub logs_scroll: u16,
     pub logs_auto_follow: bool,  // Auto-scroll to bottom on new logs
 
     // Verbosity
@@ -187,16 +187,12 @@ impl TuiApp {
                 }
             }
             Tab::Output => {
-                if self.output_scroll > 0 {
-                    self.output_scroll -= 1;
-                }
+                self.output_scroll = self.output_scroll.saturating_sub(1);
                 // User manually scrolled up, disable auto-follow
                 self.output_auto_follow = false;
             }
             Tab::Logs => {
-                if self.logs_scroll > 0 {
-                    self.logs_scroll -= 1;
-                }
+                self.logs_scroll = self.logs_scroll.saturating_sub(1);
                 // User manually scrolled up, disable auto-follow
                 self.logs_auto_follow = false;
             }
@@ -211,23 +207,24 @@ impl TuiApp {
                 }
             }
             Tab::Output => {
-                let max_scroll = self.output_lines.len().saturating_sub(1);
+                // Check if we're at or near bottom
+                let max_scroll = self.output_lines.len() as u16;
                 if self.output_scroll < max_scroll {
-                    self.output_scroll += 1;
+                    self.output_scroll = self.output_scroll.saturating_add(1);
                 }
-                // If scrolled to bottom, re-enable auto-follow
-                if self.output_scroll >= max_scroll {
+                // If scrolled near bottom, re-enable auto-follow
+                if self.output_scroll >= max_scroll.saturating_sub(5) {
                     self.output_auto_follow = true;
                 }
             }
             Tab::Logs => {
                 let entries = self.log_buffer.get_entries();
-                let max_scroll = entries.len().saturating_sub(1);
+                let max_scroll = entries.len() as u16;
                 if self.logs_scroll < max_scroll {
-                    self.logs_scroll += 1;
+                    self.logs_scroll = self.logs_scroll.saturating_add(1);
                 }
-                // If scrolled to bottom, re-enable auto-follow
-                if self.logs_scroll >= max_scroll {
+                // If scrolled near bottom, re-enable auto-follow
+                if self.logs_scroll >= max_scroll.saturating_sub(5) {
                     self.logs_auto_follow = true;
                 }
             }

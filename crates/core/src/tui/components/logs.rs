@@ -23,10 +23,9 @@ impl LogsPanel {
     }
 
     /// Render logs panel
-    pub fn render(entries: &[LogEntry], scroll: usize) -> Paragraph<'static> {
+    pub fn render(entries: &[LogEntry], scroll: u16) -> Paragraph<'static> {
         let lines: Vec<Line> = entries
             .iter()
-            .skip(scroll)
             .map(|entry| {
                 let time = entry.timestamp.format("%H:%M:%S");
                 Line::from(vec![
@@ -49,5 +48,6 @@ impl LogsPanel {
                     .borders(Borders::ALL),
             )
             .wrap(Wrap { trim: false })
+            .scroll((scroll, 0))
     }
 }

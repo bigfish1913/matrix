@@ -17,7 +17,7 @@ impl OutputPanel {
         lines: &[OutputLine],
         task_id: Option<&str>,
         verbosity: VerbosityLevel,
-        scroll: usize,
+        scroll: u16,
     ) -> Paragraph<'static> {
         let title = match task_id {
             Some(id) => format!(" Claude Output ({}) ", id),
@@ -26,7 +26,6 @@ impl OutputPanel {
 
         let text_lines: Vec<Line> = lines
             .iter()
-            .skip(scroll)
             .flat_map(|line| Self::format_output_line(line, verbosity))
             .collect();
 
@@ -37,6 +36,7 @@ impl OutputPanel {
                     .borders(Borders::ALL),
             )
             .wrap(Wrap { trim: false })
+            .scroll((scroll, 0))
     }
 
     fn format_output_line(line: &OutputLine, verbosity: VerbosityLevel) -> Vec<Line<'static>> {
