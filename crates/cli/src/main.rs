@@ -13,8 +13,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[derive(Parser, Debug)]
 #[command(name = "matrix")]
 #[command(author, version, about = "Long-Running Agent Orchestrator using Claude CLI", long_about = None)]
+#[command(next_display_order = None)]  // Keep argument order stable
 struct Args {
     /// Project goal description
+    #[arg(required = true)]
     goal: String,
 
     /// Output path (parent dir or new dir)
@@ -22,15 +24,15 @@ struct Args {
     path: Option<PathBuf>,
 
     /// Specification/requirements document
-    #[arg(short, long = "doc")]
+    #[arg(short, long = "doc", value_name = "FILE")]
     doc: Option<PathBuf>,
 
     /// Explicit workspace directory
-    #[arg(short = 'w', long = "workspace")]
+    #[arg(short = 'w', long = "workspace", value_name = "DIR")]
     workspace: Option<PathBuf>,
 
     /// MCP config JSON for e2e tests
-    #[arg(long = "mcp-config")]
+    #[arg(long = "mcp-config", value_name = "FILE")]
     mcp_config: Option<PathBuf>,
 
     /// Resume previous run
@@ -186,13 +188,8 @@ async fn run_tui_loop(
     let mut orchestrator_handle = std::pin::pin!(orchestrator_handle);
     let mut terminal = terminal;
     let mut orchestrator_completed = false;
-    let mut last_tick = std::time::Instant::now();
-    let tick_interval = std::time::Duration::from_secs(1);  // Only redraw on tick every 1s
 
     while app.running {
-        // Poll orchestrator events (may trigger redraw via auto-follow)
-        let had_events = app.poll_events_count() > 0;
-
         // Wait for next event
         tokio::select! {
             // TUI keyboard/tick events
@@ -200,24 +197,14 @@ async fn run_tui_loop(
                 match event {
                     TuiEvent::Key(key) => {
                         app.handle_key(key);
-                        // Redraw after keyboard input
-                        terminal.draw(|frame| {
-                            render_app(frame, app);
-                        })?;
                     }
                     TuiEvent::Tick => {
-                        // Only redraw on tick if:
-                        // 1. It's been more than 1 second since last tick redraw, OR
-                        // 2. We're running (need to update elapsed time)
-                        let now = std::time::Instant::now();
-                        let need_redraw = app.start_time.is_some() &&
-                            (now.duration_since(last_tick) >= tick_interval || had_events);
-
-                        if need_redraw {
+                        // Poll orchestrator events and redraw if needed
+                        let had_events = app.poll_events_count() > 0;
+                        if had_events || app.start_time.is_some() {
                             terminal.draw(|frame| {
                                 render_app(frame, app);
                             })?;
-                            last_tick = now;
                         }
                     }
                     _ => {}
@@ -226,6 +213,9 @@ async fn run_tui_loop(
 
             // Check if orchestrator finished
             result = &mut orchestrator_handle => {
+                // Poll any remaining events
+                app.poll_events();
+
                 match result {
                     Ok(Ok(())) => {
                         info!("Orchestrator completed successfully");
@@ -318,24 +308,32 @@ fn resolve_workspace(args: &Args) -> anyhow::Result<PathBuf> {
 
 /// Generate URL-friendly slug
 fn slugify(s: &str) -> String {
-    let slug: String = s
-        .to_lowercase()
+    // Try to create a slug from ASCII alphanumeric characters
+    let ascii_slug: String = s
         .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .filter(|c| c.is_ascii_alphanumeric())
         .collect();
 
-    let slug: String = slug
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
+    if !ascii_slug.is_empty() {
+        // Use ASCII characters if available
+        let slug: String = ascii_slug
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
 
-    if slug.is_empty() {
+        let slug: String = slug
+            .split('-')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+
+        slug.chars().take(40).collect()
+    } else {
+        // For non-ASCII input (like Chinese), use timestamp-based name
         chrono::Local::now()
             .format("project-%Y%m%d-%H%M%S")
             .to_string()
-    } else {
-        slug.chars().take(40).collect()
     }
 }
 

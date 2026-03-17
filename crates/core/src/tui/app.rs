@@ -279,44 +279,27 @@ impl TuiApp {
                 if self.verbosity == VerbosityLevel::Verbose {
                     self.output_task_id = Some(task_id);
                     self.output_lines.push(OutputLine::Thinking { content });
-                    if self.output_auto_follow {
-                        self.output_scroll = self.output_lines.len().saturating_sub(1);
-                    }
                 }
             }
             Event::ClaudeToolUse { task_id, tool_name, tool_input } => {
                 self.output_task_id = Some(task_id);
                 if self.verbosity >= VerbosityLevel::Normal {
                     self.output_lines.push(OutputLine::ToolUse { tool_name, tool_input });
-                    if self.output_auto_follow {
-                        self.output_scroll = self.output_lines.len().saturating_sub(1);
-                    }
                 }
             }
             Event::ClaudeToolResult { task_id, tool_name, result, success } => {
                 self.output_task_id = Some(task_id);
                 if self.verbosity >= VerbosityLevel::Normal {
                     self.output_lines.push(OutputLine::ToolResult { tool_name, result, success });
-                    if self.output_auto_follow {
-                        self.output_scroll = self.output_lines.len().saturating_sub(1);
-                    }
                 }
             }
             Event::ClaudeResult { task_id, result } => {
                 self.output_task_id = Some(task_id);
                 self.output_lines.push(OutputLine::Result { content: result });
-                if self.output_auto_follow {
-                    self.output_scroll = self.output_lines.len().saturating_sub(1);
-                }
             }
             Event::Log { timestamp, level, message } => {
                 self.log_buffer.push(level, message);
                 let _ = timestamp; // LogEntry uses Utc::now()
-                // Auto-scroll to bottom if auto-follow is enabled
-                if self.logs_auto_follow {
-                    let entries = self.log_buffer.get_entries();
-                    self.logs_scroll = entries.len().saturating_sub(1);
-                }
             }
             Event::ExecutionStateChanged { state } => {
                 self.state = state;
