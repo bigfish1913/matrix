@@ -24,7 +24,7 @@ struct Args {
     path: Option<PathBuf>,
 
     /// Specification/requirements document
-    #[arg(short, long = "doc", value_name = "FILE")]
+    #[arg(short = 'd', long = "doc", value_name = "FILE")]
     doc: Option<PathBuf>,
 
     /// Explicit workspace directory
