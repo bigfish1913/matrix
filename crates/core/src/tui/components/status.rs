@@ -22,6 +22,7 @@ impl StatusBar {
         elapsed: &str,
         model: &str,
         verbosity: VerbosityLevel,
+        version: &str,
     ) -> Paragraph<'static> {
         let state_color = match state {
             ExecutionState::Idle => Color::Gray,
@@ -54,6 +55,7 @@ impl StatusBar {
         };
 
         let line = Line::from(vec![
+            Span::styled(format!("v{} | ", version), Style::default().fg(Color::DarkGray)),
             Span::styled("Status: ", Style::default().fg(Color::Gray)),
             Span::styled(state.to_string(), Style::default().fg(state_color).add_modifier(Modifier::BOLD)),
             Span::styled(task_str, Style::default().fg(Color::Cyan)),

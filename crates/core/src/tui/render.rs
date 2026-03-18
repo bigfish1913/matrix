@@ -64,6 +64,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
     }
 
     // Render status bar
+    let version = env!("CARGO_PKG_VERSION");
     let status = StatusBar::render(
         app.state,
         app.current_task_id.as_deref(),
@@ -73,6 +74,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         &app.elapsed_string(),
         &app.current_model,
         app.verbosity,
+        version,
     );
     frame.render_widget(status, chunks[2]);
 
