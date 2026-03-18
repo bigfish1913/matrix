@@ -113,7 +113,7 @@ impl TuiApp {
             output_auto_follow: true,  // Start with auto-follow enabled
             log_buffer: LogBuffer::default(),
             logs_scroll: 0,
-            logs_auto_follow: true,  // Start with auto-follow enabled
+            logs_auto_follow: false,  // Start with auto-follow disabled (no auto-scroll)
             verbosity,
             event_receiver: None,
             show_help: false,
@@ -174,7 +174,7 @@ impl TuiApp {
             }
             Tab::Logs => {
                 self.logs_scroll = 0;
-                self.logs_auto_follow = true;
+                // Keep auto-follow disabled (user preference)
             }
         }
     }
@@ -223,10 +223,7 @@ impl TuiApp {
                 if self.logs_scroll < max_scroll {
                     self.logs_scroll = self.logs_scroll.saturating_add(1);
                 }
-                // If scrolled near bottom, re-enable auto-follow
-                if self.logs_scroll >= max_scroll.saturating_sub(5) {
-                    self.logs_auto_follow = true;
-                }
+                // Don't auto-enable auto-follow for logs (user preference)
             }
         }
     }
