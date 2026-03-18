@@ -41,29 +41,35 @@ tasks:
 
   install:
     desc: 一键安装到全局
-    deps: [build]
     cmds:
-      - cmd: powershell -Command "Copy-Item target/release/matrix.exe -Destination $HOME/.local/bin/matrix.exe -Force; Write-Host 'Installed matrix.exe to ~/.local/bin/'"
+      - cargo build -p matrix-cli --release
+      - cmd: powershell -Command "New-Item -ItemType Directory -Force -Path $HOME/.local/bin; Copy-Item target/release/matrix.exe -Destination $HOME/.local/bin/matrix.exe -Force; Write-Host \"Installed matrix.exe v{{.VERSION}} to ~/.local/bin/\""
         platforms: [windows]
       - cmd: |
           mkdir -p ~/.local/bin
           cp target/release/matrix ~/.local/bin/matrix
           chmod +x ~/.local/bin/matrix 2>/dev/null || true
-          echo "Installed matrix to ~/.local/bin/"
+          echo "Installed matrix v{{.VERSION}} to ~/.local/bin/"
         platforms: [linux, darwin]
+    vars:
+      VERSION:
+        sh: cargo pkgid -p matrix-cli | sed 's/.*#//' | sed 's/.*@//'
 
   install-local:
     desc: 安装到用户目录
-    deps: [build]
     cmds:
-      - cmd: powershell -Command "New-Item -ItemType Directory -Force -Path $HOME/.local/bin; Copy-Item target/release/matrix.exe -Destination $HOME/.local/bin/matrix.exe -Force; Write-Host 'Installed matrix.exe to ~/.local/bin/'"
+      - cargo build -p matrix-cli --release
+      - cmd: powershell -Command "New-Item -ItemType Directory -Force -Path $HOME/.local/bin; Copy-Item target/release/matrix.exe -Destination $HOME/.local/bin/matrix.exe -Force; Write-Host \"Installed matrix.exe v{{.VERSION}} to ~/.local/bin/\""
         platforms: [windows]
       - cmd: |
           mkdir -p ~/.local/bin
           cp target/release/matrix ~/.local/bin/matrix
           chmod +x ~/.local/bin/matrix 2>/dev/null || true
-          echo "Installed to ~/.local/bin/"
+          echo "Installed matrix v{{.VERSION}} to ~/.local/bin/"
         platforms: [linux, darwin]
+    vars:
+      VERSION:
+        sh: cargo pkgid -p matrix-cli | sed 's/.*#//' | sed 's/.*@//'
 
   clean:
     desc: 清理构建产物
