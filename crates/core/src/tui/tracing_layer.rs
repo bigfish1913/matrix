@@ -22,6 +22,12 @@ where
     S: Subscriber,
 {
     fn on_event(&self, event: &TracingEvent, _ctx: Context<'_, S>) {
+        // Skip logs from certain noisy modules
+        let module = event.metadata().module_path().unwrap_or("");
+        if module.contains("tokio") || module.contains("hyper") || module.contains("mio") {
+            return;
+        }
+
         // Get the log level
         let level = match *event.metadata().level() {
             tracing::Level::TRACE => LogLevel::Trace,

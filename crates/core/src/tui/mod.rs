@@ -34,6 +34,7 @@ pub struct LogEntry {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub level: LogLevel,
     pub message: String,
+    pub repeat_count: usize,  // Number of times this message pattern was repeated
 }
 
 impl LogBuffer {
@@ -45,14 +46,48 @@ impl LogBuffer {
         }
     }
 
-    /// Push a new log entry
+    /// Extract pattern from message by replacing numbers with placeholder
+    fn extract_pattern(message: &str) -> String {
+        // Replace sequences of digits with {n}
+        let mut result = String::with_capacity(message.len());
+        let mut in_number = false;
+        for c in message.chars() {
+            if c.is_ascii_digit() {
+                if !in_number {
+                    result.push_str("{n}");
+                    in_number = true;
+                }
+                // Skip digit, already added placeholder
+            } else {
+                result.push(c);
+                in_number = false;
+            }
+        }
+        result
+    }
+
+    /// Push a new log entry (deduplicates similar messages with different numbers)
     pub fn push(&self, level: LogLevel, message: String) {
+        let mut entries = self.entries.lock().unwrap();
+        let pattern = Self::extract_pattern(&message);
+
+        // Check if this matches the pattern of the last message
+        if let Some(last) = entries.last_mut() {
+            let last_pattern = Self::extract_pattern(&last.message);
+            if last.level == level && last_pattern == pattern {
+                // Same pattern, increment repeat count and update message to show range
+                last.repeat_count += 1;
+                return;
+            }
+        }
+
+        // Add new entry
         let entry = LogEntry {
             timestamp: chrono::Utc::now(),
             level,
             message,
+            repeat_count: 1,
         };
-        let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
         if entries.len() > self.max_entries {
             entries.remove(0);
@@ -74,7 +109,7 @@ impl Default for LogBuffer {
 pub use app::TuiApp;
 pub use event::{Event, ExecutionState, Key, LogLevel, TuiEvent, VerbosityLevel};
 pub use render::{render_app, MatrixTerminal};
-pub use terminal::{event_stream, init_terminal, restore_terminal};
+pub use terminal::{event_stream, init_terminal, restore_terminal, TerminalGuard};
 pub use tracing_layer::TuiLogLayer;
 
 #[cfg(test)]

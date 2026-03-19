@@ -117,6 +117,7 @@ impl ClaudeRunner {
 
         let result = timeout(timeout_duration, async {
             let mut child = cmd
+                .kill_on_drop(true) // Kill child when future is dropped
                 .spawn()
                 .map_err(|e| Error::ClaudeCli(format!("Failed to spawn: {}", e)))?;
 
@@ -144,6 +145,9 @@ impl ClaudeRunner {
         let stdout = String::from_utf8_lossy(&result.stdout);
         let stderr = String::from_utf8_lossy(&result.stderr);
         let combined = format!("{}{}", stdout, stderr);
+
+        // Log the response for TUI display
+        info!(target: "claude", "[Claude Response] {}", &combined[..combined.len().min(500)]);
 
         parse_claude_result(&combined)
     }
@@ -182,6 +186,7 @@ impl ClaudeRunner {
 
         let result = timeout(timeout_duration, async {
             let mut child = cmd
+                .kill_on_drop(true) // Kill child when future is dropped
                 .spawn()
                 .map_err(|e| Error::ClaudeCli(format!("Failed to spawn: {}", e)))?;
 
@@ -212,8 +217,8 @@ impl ClaudeRunner {
                     if let Some(result) = json.get("result") {
                         if let Some(text) = result.as_str() {
                             all_text = text.to_string();
-                            // Print result text
-                            println!("{}", text);
+                            // Send result to TUI via tracing
+                            info!(target: "claude", "[Result] {}", text);
                         }
                     }
 
@@ -239,14 +244,23 @@ impl ClaudeRunner {
 
                     // Check for tool use (for debug output)
                     if let Some(tool_name) = json.get("tool_name").and_then(|v| v.as_str()) {
-                        info!("[Tool] {}", tool_name);
+                        info!(target: "claude", "[Tool] {}", tool_name);
                     }
 
-                    // Check for message content
+                    // Check for tool input
+                    if let Some(input) = json.get("tool_input") {
+                        if let Some(input_str) = input.as_str() {
+                            info!(target: "claude", "[Tool Input] {}", input_str);
+                        } else {
+                            info!(target: "claude", "[Tool Input] {}", input.to_string());
+                        }
+                    }
+
+                    // Check for message content (thinking)
                     if let Some(content) = json.get("content").and_then(|v| v.as_array()) {
                         for item in content {
                             if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                                println!("{}", text);
+                                info!(target: "claude", "[Thinking] {}", text);
                             }
                         }
                     }

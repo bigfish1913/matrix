@@ -1,6 +1,7 @@
 //! TUI Event handling.
 
 use crate::models::TaskStatus;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Verbosity level for Claude output display
@@ -57,6 +58,30 @@ impl std::fmt::Display for LogLevel {
             Self::Warn => write!(f, "WARN"),
             Self::Error => write!(f, "ERROR"),
         }
+    }
+}
+
+/// Wrapper for oneshot sender that implements Clone
+#[derive(Debug)]
+pub struct AnswerSender(Arc<Mutex<Option<tokio::sync::oneshot::Sender<Vec<String>>>>>);
+
+impl AnswerSender {
+    pub fn new(sender: tokio::sync::oneshot::Sender<Vec<String>>) -> Self {
+        Self(Arc::new(Mutex::new(Some(sender))))
+    }
+
+    pub fn send(self, answers: Vec<String>) -> Result<(), Vec<String>> {
+        if let Some(sender) = self.0.lock().unwrap().take() {
+            sender.send(answers)
+        } else {
+            Err(answers)
+        }
+    }
+}
+
+impl Clone for AnswerSender {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
     }
 }
 
@@ -121,6 +146,12 @@ pub enum Event {
     // Model info
     ModelChanged {
         model: String,
+    },
+
+    // Clarification questions (ask mode)
+    ClarificationQuestions {
+        questions: Vec<String>,
+        response_tx: AnswerSender,
     },
 }
 

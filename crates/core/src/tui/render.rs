@@ -31,6 +31,19 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
 
     // Render main content based on current tab
     match app.current_tab {
+        crate::tui::app::Tab::Logs => {
+            // Calculate scroll for auto-follow
+            let entries = app.log_buffer.get_entries();
+            // Calculate viewport height (subtract borders: 2 lines for top/bottom borders)
+            let viewport_height = chunks[1].height.saturating_sub(2);
+            let scroll = if app.logs_auto_follow {
+                LogsPanel::calculate_auto_scroll(entries.len(), viewport_height)
+            } else {
+                app.logs_scroll
+            };
+            let paragraph = LogsPanel::render(&entries, scroll, viewport_height);
+            frame.render_widget(paragraph, chunks[1]);
+        }
         crate::tui::app::Tab::Tasks => {
             let (list, state) = TasksPanel::render(&app.tasks, app.tasks_scroll);
             frame.render_stateful_widget(list, chunks[1], &mut state.clone());
@@ -48,17 +61,6 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
                 app.verbosity,
                 scroll,
             );
-            frame.render_widget(paragraph, chunks[1]);
-        }
-        crate::tui::app::Tab::Logs => {
-            // Calculate scroll for auto-follow
-            let entries = app.log_buffer.get_entries();
-            let scroll = if app.logs_auto_follow {
-                entries.len() as u16  // Scroll to bottom
-            } else {
-                app.logs_scroll
-            };
-            let paragraph = LogsPanel::render(&entries, scroll);
             frame.render_widget(paragraph, chunks[1]);
         }
     }
@@ -81,6 +83,11 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
     // Render help overlay if active
     if app.show_help {
         render_help_overlay(frame);
+    }
+
+    // Render clarification dialog if active
+    if app.clarification.is_active() {
+        render_clarification_dialog(frame, app);
     }
 }
 
@@ -125,4 +132,54 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
+    let area = centered_rect(70, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let clarification = &app.clarification;
+
+    // Build the content
+    let mut content = String::new();
+    content.push_str("Clarifying Questions\n");
+    content.push_str("═══════════════════\n\n");
+
+    // Show all questions with their answers or status
+    for (i, question) in clarification.questions.iter().enumerate() {
+        if i < clarification.current_index {
+            // Already answered
+            let answer = &clarification.answers[i];
+            content.push_str(&format!("[✓] {}\n", question));
+            if answer.is_empty() {
+                content.push_str("    Answer: (skipped)\n\n");
+            } else {
+                content.push_str(&format!("    Answer: {}\n\n", answer));
+            }
+        } else if i == clarification.current_index {
+            // Current question
+            content.push_str(&format!(">>> {}\n",
+                question
+            ));
+            content.push_str(&format!("    Your answer: {}_\n\n", clarification.current_input));
+        } else {
+            // Future question
+            content.push_str(&format!("[ ] {}\n\n", question));
+        }
+    }
+
+    content.push_str("─────────────────────\n");
+    content.push_str("Press Enter to submit answer (blank to skip)\n");
+    content.push_str("Press Esc to cancel all questions\n");
+
+    let paragraph = Paragraph::new(content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Question {}/{} ", clarification.current_index + 1, clarification.questions.len()))
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(paragraph, area);
 }

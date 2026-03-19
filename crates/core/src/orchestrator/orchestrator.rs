@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::models::{Complexity, Task, TaskStatus};
 use crate::store::TaskStore;
+use crate::tui::event::AnswerSender;
 use crate::tui::{Event, EventSender, ExecutionState};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -40,7 +41,7 @@ impl OrchestratorConfig {
             mcp_config: None,
             num_agents: 1,
             debug_mode: false,
-            ask_mode: false,
+            ask_mode: true, // 默认开启 ask 模式
             resume: false,
             event_sender: None,
         }
@@ -55,6 +56,8 @@ pub struct Orchestrator {
     agent_pool: SharedAgentPool,
     executor: Arc<TaskExecutor>,
     start_time: Option<Instant>,
+    /// Track last progress values to avoid duplicate log spam
+    last_progress: (usize, usize, usize, usize), // (completed, pending, failed, total)
 }
 
 impl Orchestrator {
@@ -80,7 +83,7 @@ impl Orchestrator {
             store.clone(),
             agent_pool.clone(),
             executor_config,
-        ));
+        ).with_event_sender(config.event_sender.clone()));
 
         Ok(Self {
             config,
@@ -88,6 +91,7 @@ impl Orchestrator {
             agent_pool,
             executor,
             start_time: None,
+            last_progress: (0, 0, 0, 0),
         })
     }
 
@@ -200,12 +204,60 @@ Respond ONLY with JSON:
             Err(_) => return Ok(String::new()),
         };
 
+        // Check if in TUI mode
+        if let Some(ref sender) = self.config.event_sender {
+            // TUI mode: send questions via event channel and wait for answers
+            let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
+            let _ = sender.send(Event::ClarificationQuestions {
+                questions: questions.questions.clone(),
+                response_tx: AnswerSender::new(tx),
+            });
+
+            // Wait for answers from TUI (with timeout in case TUI is closed)
+            match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {
+                Ok(Ok(answers)) => {
+                    if answers.is_empty() || answers.iter().all(|a| a.trim().is_empty()) {
+                        return Ok(String::new());
+                    }
+                    let formatted: Vec<String> = questions
+                        .questions
+                        .iter()
+                        .zip(answers.iter())
+                        .map(|(q, a)| format!("Q: {}\nA: {}", q, if a.is_empty() { "(skipped)" } else { a }))
+                        .collect();
+                    return Ok(formatted.join("\n\n"));
+                }
+                Ok(Err(_)) => {
+                    warn!("Failed to receive clarification answers from TUI");
+                    return Ok(String::new());
+                }
+                Err(_) => {
+                    warn!("Timeout waiting for clarification answers from TUI");
+                    return Ok(String::new());
+                }
+            }
+        }
+
+        // Non-TUI mode: use stdin/stdout
         println!("\n[?] Clarifying Questions\n");
 
         let mut answers: Vec<String> = Vec::new();
         for (i, question) in questions.questions.iter().enumerate() {
-            println!("  [{}] {} (press Enter to skip)", i + 1, question);
-            answers.push(format!("Q{}: {}", i + 1, question));
+            use std::io::{self, Write};
+            print!("  [{}] {} (press Enter to skip): ", i + 1, question);
+            io::stdout().flush().unwrap();
+
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_ok() {
+                let answer = input.trim();
+                if answer.is_empty() {
+                    answers.push(format!("Q{}: {} (skipped)", i + 1, question));
+                } else {
+                    answers.push(format!("Q{}: {}\n    A: {}", i + 1, question, answer));
+                }
+            } else {
+                answers.push(format!("Q{}: {} (skipped)", i + 1, question));
+            }
         }
 
         if answers.is_empty() {
@@ -460,10 +512,14 @@ OR if splitting needed:
 
                 if output.status.success() {
                     info!("Final tests passed");
-                    println!("\nFinal tests passed\n");
+                    if self.config.event_sender.is_none() {
+                        println!("\nFinal tests passed\n");
+                    }
                 } else {
                     warn!("Final tests failed");
-                    println!("\nFinal tests failed:\n{}\n", stdout);
+                    if self.config.event_sender.is_none() {
+                        println!("\nFinal tests failed:\n{}\n", stdout);
+                    }
                 }
             }
             Err(e) => {
@@ -474,7 +530,7 @@ OR if splitting needed:
         Ok(())
     }
 
-    async fn run_dispatcher(&self) -> Result<()> {
+    async fn run_dispatcher(&mut self) -> Result<()> {
         let primary_slots = self.config.num_agents.div_ceil(2);
         let subtask_slots = self.config.num_agents.saturating_sub(primary_slots);
         let deadline = Instant::now() + Duration::from_secs(24 * 3600);
@@ -523,8 +579,30 @@ OR if splitting needed:
                 .filter(|t| t.depends_on.iter().all(|dep| completed_ids.contains(dep)))
                 .collect();
 
-            let primary_pending: Vec<_> = pending.iter().filter(|t| t.depth == 0).collect();
-            let subtask_pending: Vec<_> = pending.iter().filter(|t| t.depth > 0).collect();
+            // Phase 2: Assess complexity and split if needed
+            // Evaluate each task before dispatching to determine if splitting is needed
+            let mut tasks_to_dispatch: Vec<Task> = Vec::new();
+            for mut task in pending {
+                // Skip if already being processed
+                if dispatched_ids.contains(&task.id) {
+                    continue;
+                }
+                // Only assess tasks that haven't been assessed yet (complexity is unknown)
+                // or tasks that are potentially complex
+                if task.complexity == Complexity::Unknown || task.complexity == Complexity::Complex {
+                    let should_dispatch = self.assess_and_split(&mut task).await?;
+                    if should_dispatch {
+                        tasks_to_dispatch.push(task);
+                    }
+                    // If not should_dispatch, task was split into subtasks, skip it
+                } else {
+                    // Task already assessed as simple, dispatch it
+                    tasks_to_dispatch.push(task);
+                }
+            }
+
+            let primary_pending: Vec<_> = tasks_to_dispatch.iter().filter(|t| t.depth == 0).collect();
+            let subtask_pending: Vec<_> = tasks_to_dispatch.iter().filter(|t| t.depth > 0).collect();
 
             // Dispatch primary tasks
             for task in primary_pending {
@@ -585,16 +663,24 @@ OR if splitting needed:
     }
 
     fn print_header(&self) {
-        println!();
-        println!("=== MATRIX - Agent Orchestrator ===");
-        println!();
-        println!("Goal:      {}", self.config.goal);
-        println!("Workspace: {}", self.config.workspace.display());
-        println!("Agents:    {}", self.config.num_agents);
-        println!();
+        // In TUI mode, use tracing instead of println to avoid interfering with TUI
+        if self.config.event_sender.is_some() {
+            info!("=== MATRIX - Agent Orchestrator ===");
+            info!("Goal:      {}", self.config.goal);
+            info!("Workspace: {}", self.config.workspace.display());
+            info!("Agents:    {}", self.config.num_agents);
+        } else {
+            println!();
+            println!("=== MATRIX - Agent Orchestrator ===");
+            println!();
+            println!("Goal:      {}", self.config.goal);
+            println!("Workspace: {}", self.config.workspace.display());
+            println!("Agents:    {}", self.config.num_agents);
+            println!();
+        }
     }
 
-    async fn print_progress(&self) {
+    async fn print_progress(&mut self) {
         let total = self.store.total().await.unwrap_or(0);
         let completed = self.store.count(TaskStatus::Completed).await.unwrap_or(0);
         let pending = self.store.count(TaskStatus::Pending).await.unwrap_or(0);
@@ -603,12 +689,36 @@ OR if splitting needed:
         let elapsed = self.start_time.map(|t| t.elapsed()).unwrap_or_default();
         let elapsed_str = format_duration(elapsed);
 
-        println!();
-        println!(
-            "Progress: {} completed | {} pending | {} failed / {} total [elapsed {}]",
-            completed, pending, failed, total, elapsed_str
-        );
-        println!();
+        // Check if progress has changed since last time
+        let current_progress = (completed, pending, failed, total);
+        let progress_changed = current_progress != self.last_progress;
+
+        // In TUI mode, use tracing instead of println to avoid interfering with TUI
+        // Only log if progress has actually changed to avoid spamming the logs panel
+        if self.config.event_sender.is_some() {
+            if progress_changed {
+                info!(
+                    "Progress: {} completed | {} pending | {} failed / {} total",
+                    completed, pending, failed, total
+                );
+                self.last_progress = current_progress;
+            }
+
+            // Always emit ProgressUpdate event for status bar
+            self.emit_event(Event::ProgressUpdate {
+                completed,
+                total,
+                failed,
+                elapsed,
+            });
+        } else {
+            println!();
+            println!(
+                "Progress: {} completed | {} pending | {} failed / {} total [elapsed {}]",
+                completed, pending, failed, total, elapsed_str
+            );
+            println!();
+        }
     }
 
     async fn print_summary(&self) -> Result<()> {
@@ -616,14 +726,24 @@ OR if splitting needed:
         let failed = self.store.count(TaskStatus::Failed).await?;
         let total = self.store.total().await?;
 
-        println!();
-        println!("{}", "=".repeat(45));
-        println!(
-            "All tasks processed: {}/{} completed, {} failed",
-            completed, total, failed
-        );
-        println!("{}", "=".repeat(45));
-        println!();
+        // In TUI mode, use tracing instead of println to avoid interfering with TUI
+        if self.config.event_sender.is_some() {
+            info!("{}", "=".repeat(45));
+            info!(
+                "All tasks processed: {}/{} completed, {} failed",
+                completed, total, failed
+            );
+            info!("{}", "=".repeat(45));
+        } else {
+            println!();
+            println!("{}", "=".repeat(45));
+            println!(
+                "All tasks processed: {}/{} completed, {} failed",
+                completed, total, failed
+            );
+            println!("{}", "=".repeat(45));
+            println!();
+        }
 
         Ok(())
     }

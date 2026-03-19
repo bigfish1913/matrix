@@ -13,7 +13,7 @@ pub struct TabSwitcher;
 impl TabSwitcher {
     /// Render tab switcher
     pub fn render(current_tab: Tab) -> Tabs<'static> {
-        let titles = vec!["Tasks", "Claude Output", "Logs"];
+        let titles = vec!["Logs", "Tasks", "Claude Output"];
 
         let tabs: Vec<Line<'static>> = titles
             .into_iter()
@@ -29,9 +29,9 @@ impl TabSwitcher {
         Tabs::new(tabs)
             .block(Block::default().borders(Borders::BOTTOM))
             .select(match current_tab {
-                Tab::Tasks => 0,
-                Tab::Output => 1,
-                Tab::Logs => 2,
+                Tab::Logs => 0,
+                Tab::Tasks => 1,
+                Tab::Output => 2,
             })
             .style(Style::default().fg(Color::White))
             .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED))

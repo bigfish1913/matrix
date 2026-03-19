@@ -4,29 +4,51 @@ use crate::models::TaskStatus;
 use crate::tui::{Event, EventReceiver, ExecutionState, Key, LogBuffer, VerbosityLevel};
 use std::time::{Duration, Instant};
 
-/// Current tab being displayed
+/// State for clarification questions dialog
+#[derive(Debug, Default)]
+pub struct ClarificationState {
+    pub questions: Vec<String>,
+    pub answers: Vec<String>,
+    pub current_index: usize,
+    pub current_input: String,
+    pub response_tx: Option<crate::tui::event::AnswerSender>,
+}
+
+impl ClarificationState {
+    pub fn is_active(&self) -> bool {
+        self.response_tx.is_some()
+    }
+
+    pub fn finish(&mut self) {
+        self.response_tx = None;
+        self.questions.clear();
+        self.answers.clear();
+        self.current_index = 0;
+        self.current_input.clear();
+    }
+}
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tab {
     #[default]
+    Logs,
     Tasks,
     Output,
-    Logs,
 }
 
 impl Tab {
     pub fn next(self) -> Self {
         match self {
+            Self::Logs => Self::Tasks,
             Self::Tasks => Self::Output,
             Self::Output => Self::Logs,
-            Self::Logs => Self::Tasks,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
+            Self::Logs => Self::Output,
             Self::Tasks => Self::Logs,
             Self::Output => Self::Tasks,
-            Self::Logs => Self::Output,
         }
     }
 }
@@ -90,6 +112,9 @@ pub struct TuiApp {
     // Help overlay
     pub show_help: bool,
 
+    // Clarification questions (ask mode)
+    pub clarification: ClarificationState,
+
     // Running flag
     pub running: bool,
 }
@@ -113,10 +138,11 @@ impl TuiApp {
             output_auto_follow: true,  // Start with auto-follow enabled
             log_buffer: LogBuffer::default(),
             logs_scroll: 0,
-            logs_auto_follow: false,  // Start with auto-follow disabled (no auto-scroll)
+            logs_auto_follow: true,  // Enable auto-follow for logs (auto-scroll to new logs)
             verbosity,
             event_receiver: None,
             show_help: false,
+            clarification: ClarificationState::default(),
             running: true,
         }
     }
@@ -133,6 +159,12 @@ impl TuiApp {
 
     /// Handle keyboard input
     pub fn handle_key(&mut self, key: Key) {
+        // Handle clarification questions first
+        if self.clarification.is_active() {
+            self.handle_clarification_key(key);
+            return;
+        }
+
         if self.show_help {
             if key == Key::Esc || key == Key::Char('?') || key == Key::Char('q') {
                 self.show_help = false;
@@ -165,6 +197,50 @@ impl TuiApp {
         }
     }
 
+    /// Handle keyboard input during clarification questions
+    fn handle_clarification_key(&mut self, key: Key) {
+        match key {
+            Key::Enter => {
+                // Save current answer and move to next question
+                let answer = self.clarification.current_input.clone();
+                if answer.trim().is_empty() {
+                    self.clarification.answers.push(String::new());
+                } else {
+                    self.clarification.answers.push(answer);
+                }
+                self.clarification.current_index += 1;
+                self.clarification.current_input.clear();
+
+                // Check if all questions are answered
+                if self.clarification.current_index >= self.clarification.questions.len() {
+                    // Send answers back to orchestrator
+                    if let Some(tx) = self.clarification.response_tx.take() {
+                        let _ = tx.send(self.clarification.answers.clone());
+                    }
+                    self.clarification.finish();
+                }
+            }
+            Key::Char(c) => {
+                self.clarification.current_input.push(c);
+            }
+            Key::Esc => {
+                // Cancel clarification - send empty answers
+                if let Some(tx) = self.clarification.response_tx.take() {
+                    let empty_answers: Vec<String> =
+                        std::iter::repeat(String::new())
+                            .take(self.clarification.questions.len())
+                            .collect();
+                    let _ = tx.send(empty_answers);
+                }
+                self.clarification.finish();
+            }
+            Key::BackTab => {
+                self.clarification.current_input.pop();
+            }
+            _ => {}
+        }
+    }
+
     fn reset_scroll(&mut self) {
         match self.current_tab {
             Tab::Tasks => self.tasks_scroll = 0,
@@ -174,7 +250,7 @@ impl TuiApp {
             }
             Tab::Logs => {
                 self.logs_scroll = 0;
-                // Keep auto-follow disabled (user preference)
+                // Keep auto-follow enabled (user preference)
             }
         }
     }
@@ -223,7 +299,10 @@ impl TuiApp {
                 if self.logs_scroll < max_scroll {
                     self.logs_scroll = self.logs_scroll.saturating_add(1);
                 }
-                // Don't auto-enable auto-follow for logs (user preference)
+                // Re-enable auto-follow when scrolled near bottom (consistent with Output panel)
+                if self.logs_scroll >= max_scroll.saturating_sub(5) {
+                    self.logs_auto_follow = true;
+                }
             }
         }
     }
@@ -294,6 +373,12 @@ impl TuiApp {
             Event::Log { timestamp, level, message } => {
                 self.log_buffer.push(level, message);
                 let _ = timestamp; // LogEntry uses Utc::now()
+                // Auto-scroll if auto-follow is enabled
+                if self.logs_auto_follow {
+                    // Scroll will be calculated in render based on viewport height
+                    // Just mark that we need to recalculate
+                    self.logs_scroll = u16::MAX; // Signal to recalculate in render
+                }
             }
             Event::ExecutionStateChanged { state } => {
                 self.state = state;
@@ -309,6 +394,13 @@ impl TuiApp {
             }
             Event::ModelChanged { model } => {
                 self.current_model = model;
+            }
+            Event::ClarificationQuestions { questions, response_tx } => {
+                self.clarification.questions = questions;
+                self.clarification.answers = Vec::new();
+                self.clarification.current_index = 0;
+                self.clarification.current_input = String::new();
+                self.clarification.response_tx = Some(response_tx);
             }
         }
     }
@@ -362,10 +454,12 @@ mod tests {
 
     #[test]
     fn test_tab_navigation() {
+        // New order: Logs -> Tasks -> Output -> Logs
+        assert_eq!(Tab::Logs.next(), Tab::Tasks);
         assert_eq!(Tab::Tasks.next(), Tab::Output);
         assert_eq!(Tab::Output.next(), Tab::Logs);
-        assert_eq!(Tab::Logs.next(), Tab::Tasks);
 
+        assert_eq!(Tab::Logs.prev(), Tab::Output);
         assert_eq!(Tab::Tasks.prev(), Tab::Logs);
         assert_eq!(Tab::Output.prev(), Tab::Tasks);
     }
@@ -373,7 +467,7 @@ mod tests {
     #[test]
     fn test_tui_app_new() {
         let app = TuiApp::new(VerbosityLevel::Normal);
-        assert_eq!(app.current_tab, Tab::Tasks);
+        assert_eq!(app.current_tab, Tab::Logs);  // Default is now Logs
         assert_eq!(app.verbosity, VerbosityLevel::Normal);
         assert!(app.running);
     }
@@ -382,7 +476,7 @@ mod tests {
     fn test_handle_key_tab() {
         let mut app = TuiApp::new(VerbosityLevel::Normal);
         app.handle_key(Key::Tab);
-        assert_eq!(app.current_tab, Tab::Output);
+        assert_eq!(app.current_tab, Tab::Tasks);  // Logs -> Tasks
     }
 
     #[test]

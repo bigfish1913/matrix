@@ -7,6 +7,7 @@ use crate::detector::TestRunnerDetector;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
 use crate::store::TaskStore;
+use crate::tui::{Event, EventSender};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,6 +46,7 @@ pub struct TaskExecutor {
     agent_pool: SharedAgentPool,
     config: ExecutorConfig,
     setup_done: bool,
+    event_sender: Option<EventSender>,
 }
 
 impl TaskExecutor {
@@ -64,6 +66,20 @@ impl TaskExecutor {
             agent_pool,
             config,
             setup_done: false,
+            event_sender: None,
+        }
+    }
+
+    /// Set the event sender for TUI updates
+    pub fn with_event_sender(mut self, sender: Option<EventSender>) -> Self {
+        self.event_sender = sender;
+        self
+    }
+
+    /// Emit an event to the TUI if sender is configured
+    fn emit_event(&self, event: Event) {
+        if let Some(ref sender) = self.event_sender {
+            let _ = sender.send(event);
         }
     }
 
@@ -149,6 +165,12 @@ impl TaskExecutor {
 
         info!(task_id = %task.id, title = %task.title, model = %model, "Executing task");
 
+        // Emit task started event
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: format!("Starting execution with model {}", model),
+        });
+
         // Build prompt
         let prompt = self.build_execution_prompt(task);
 
@@ -177,7 +199,11 @@ impl TaskExecutor {
         match result {
             Ok(claude_result) if claude_result.is_error => {
                 warn!(task_id = %task.id, error = %claude_result.text, "Execution failed");
-                task.error = Some(claude_result.text);
+                task.error = Some(claude_result.text.clone());
+                self.emit_event(Event::ClaudeResult {
+                    task_id: task.id.clone(),
+                    result: format!("Error: {}", claude_result.text),
+                });
                 Ok(false)
             }
             Ok(claude_result) => {
@@ -185,7 +211,7 @@ impl TaskExecutor {
                 let post_snapshot = self.snapshot_workspace().await?;
                 task.modified_files = self.snapshot_diff(&pre_snapshot, &post_snapshot);
 
-                task.result = Some(claude_result.text);
+                task.result = Some(claude_result.text.clone());
                 if let Some(sid) = &claude_result.session_id {
                     task.session_id = Some(sid.clone());
                     self.agent_pool.record(task, sid, thread_name).await;
@@ -193,11 +219,22 @@ impl TaskExecutor {
 
                 let stats = self.agent_pool.stats().await;
                 info!(task_id = %task.id, stats = %stats, "Task executed");
+
+                // Emit result event
+                self.emit_event(Event::ClaudeResult {
+                    task_id: task.id.clone(),
+                    result: claude_result.text.clone(),
+                });
+
                 Ok(true)
             }
             Err(e) => {
                 warn!(task_id = %task.id, error = %e, "Execution error");
                 task.error = Some(e.to_string());
+                self.emit_event(Event::ClaudeResult {
+                    task_id: task.id.clone(),
+                    result: format!("Execution error: {}", e),
+                });
                 Ok(false)
             }
         }

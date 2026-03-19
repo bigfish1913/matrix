@@ -47,8 +47,8 @@ struct Args {
     #[arg(long)]
     debug: bool,
 
-    /// Ask clarifying questions before planning
-    #[arg(short, long)]
+    /// Ask clarifying questions before planning (default: true)
+    #[arg(short, long, default_value = "true")]
     ask: bool,
 
     /// Disable TUI mode, use simple output
@@ -106,21 +106,24 @@ async fn main() -> anyhow::Result<()> {
 /// Run with TUI mode
 async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     use matrix_core::tui::{
-        create_event_channel, init_terminal, restore_terminal, LogBuffer, TuiLogLayer,
+        create_event_channel, init_terminal, restore_terminal, LogBuffer, TerminalGuard, TuiLogLayer,
     };
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-    // Initialize terminal
+    // Initialize terminal and wrap in guard for automatic restoration on panic/unwind
     let terminal = init_terminal()?;
+    let terminal_guard = TerminalGuard::new(terminal);
 
     // Create event channel for orchestrator -> TUI communication
     let (event_sender, event_receiver) = create_event_channel();
 
     // Initialize tracing with TuiLogLayer to send logs to TUI
+    // Use INFO level by default, or respect MATRIX_LOG env var
+    let log_filter = std::env::var("MATRIX_LOG")
+        .unwrap_or_else(|_| "matrix=info".to_string());
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "matrix=info".into()),
+            tracing_subscriber::EnvFilter::new(log_filter),
         )
         .with(TuiLogLayer::new(event_sender.clone()))
         .init();
@@ -144,7 +147,7 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     let doc_content = if let Some(doc_path) = &args.doc {
         if !doc_path.exists() {
             // Restore terminal before exiting
-            let _ = restore_terminal(terminal);
+            drop(terminal_guard);
             anyhow::bail!("Document not found: {}", doc_path.display());
         }
         let content = std::fs::read_to_string(doc_path)?;
@@ -174,13 +177,24 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
         orchestrator.run().await.map_err(|e| anyhow::anyhow!("{}", e))
     });
 
+    // Extract terminal from guard for the event loop
+    // If the loop panics, the guard will restore the terminal on drop
+    let terminal = terminal_guard.into_inner();
+
     // Run TUI event loop
     let result = run_tui_loop(terminal, &mut app, orchestrator_handle).await;
 
-    // Restore terminal (always, even on error)
-    // Note: terminal is moved back from run_tui_loop on completion
-    if let Ok((terminal, _)) = result {
-        let _ = restore_terminal(terminal);
+    // Always restore terminal - run_tui_loop always returns Ok with the terminal
+    match result {
+        Ok((terminal, _)) => {
+            if let Err(e) = restore_terminal(terminal) {
+                eprintln!("Warning: Failed to restore terminal: {}", e);
+            }
+        }
+        Err(e) => {
+            // This should not happen as run_tui_loop always returns Ok
+            eprintln!("TUI error: {}", e);
+        }
     }
 
     Ok(())
@@ -189,29 +203,28 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
 /// Run TUI event loop
 /// Returns the terminal so it can be properly restored
 async fn run_tui_loop(
-    terminal: MatrixTerminal,
+    mut terminal: MatrixTerminal,
     app: &mut TuiApp,
     orchestrator_handle: tokio::task::JoinHandle<anyhow::Result<()>>,
 ) -> anyhow::Result<(MatrixTerminal, bool)> {
     use matrix_core::tui::event_stream;
     use matrix_core::TuiEvent;
     use std::pin::pin;
+    use tokio::signal;
 
     let events = event_stream();
     let mut events = pin!(events);
     let mut orchestrator_handle = std::pin::pin!(orchestrator_handle);
-    let mut terminal = terminal;
     let mut orchestrator_completed = false;
-    let mut last_redraw = std::time::Instant::now();
-    let redraw_interval = std::time::Duration::from_millis(500); // Redraw max 2x/sec for time updates
 
     // Initial draw
-    terminal.draw(|frame| {
+    if let Err(_) = terminal.draw(|frame| {
         render_app(frame, app);
-    })?;
+    }) {
+        return Ok((terminal, false));
+    }
 
     while app.running {
-        // Wait for next event
         tokio::select! {
             // TUI keyboard/tick events
             Some(event) = events.next() => {
@@ -219,60 +232,65 @@ async fn run_tui_loop(
                     TuiEvent::Key(key) => {
                         app.handle_key(key);
                         // Redraw immediately on key press
-                        terminal.draw(|frame| {
+                        let _ = terminal.draw(|frame| {
                             render_app(frame, app);
-                        })?;
+                        });
                     }
                     TuiEvent::Tick => {
-                        // Poll orchestrator events
-                        let had_events = app.poll_events_count() > 0;
-                        let should_redraw = had_events
-                            || last_redraw.elapsed() > redraw_interval;
-
-                        if should_redraw {
-                            last_redraw = std::time::Instant::now();
-                            terminal.draw(|frame| {
+                        // Poll for new orchestrator events and redraw immediately if any
+                        let had_new_events = app.poll_events_count() > 0;
+                        if had_new_events {
+                            let _ = terminal.draw(|frame| {
                                 render_app(frame, app);
-                            })?;
+                            });
                         }
                     }
                     _ => {}
                 }
             }
 
+            // Handle Ctrl+C signal
+            _ = signal::ctrl_c() => {
+                tracing::info!("Received Ctrl+C signal, shutting down");
+                std::process::exit(130);
+            }
+
             // Check if orchestrator finished
             result = &mut orchestrator_handle => {
-                // Poll any remaining events
                 app.poll_events();
 
                 match result {
                     Ok(Ok(())) => {
                         info!("Orchestrator completed successfully");
                         orchestrator_completed = true;
-                        // Redraw final state
-                        terminal.draw(|frame| {
+                        let _ = terminal.draw(|frame| {
                             render_app(frame, app);
-                        })?;
-                        // Don't exit immediately - let user see the results
-                        // User can press 'q' to exit
+                        });
                     }
                     Ok(Err(e)) => {
                         tracing::error!("Orchestrator failed: {}", e);
                         orchestrator_completed = true;
-                        terminal.draw(|frame| {
+                        let _ = terminal.draw(|frame| {
                             render_app(frame, app);
-                        })?;
+                        });
                     }
                     Err(e) => {
                         tracing::error!("Orchestrator task panicked: {}", e);
                         orchestrator_completed = true;
-                        terminal.draw(|frame| {
+                        let _ = terminal.draw(|frame| {
                             render_app(frame, app);
-                        })?;
+                        });
                     }
                 }
             }
         }
+    }
+
+    // User pressed 'q' to exit - abort orchestrator if still running
+    if !orchestrator_completed {
+        orchestrator_handle.abort();
+        let timeout = tokio::time::Duration::from_secs(3);
+        let _ = tokio::time::timeout(timeout, orchestrator_handle).await;
     }
 
     Ok((terminal, orchestrator_completed))
