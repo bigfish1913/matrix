@@ -21,6 +21,7 @@ pub enum VerbosityLevel {
 pub enum ExecutionState {
     #[default]
     Idle,
+    Clarifying,
     Generating,
     Running,
     Completed,
@@ -31,6 +32,7 @@ impl std::fmt::Display for ExecutionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Idle => write!(f, "Idle"),
+            Self::Clarifying => write!(f, "Clarifying"),
             Self::Generating => write!(f, "Generating"),
             Self::Running => write!(f, "Running"),
             Self::Completed => write!(f, "Completed"),
@@ -150,9 +152,18 @@ pub enum Event {
 
     // Clarification questions (ask mode)
     ClarificationQuestions {
-        questions: Vec<String>,
+        questions: Vec<ClarificationQuestion>,
         response_tx: AnswerSender,
     },
+}
+
+/// A clarification question with multiple choice options
+#[derive(Debug, Clone)]
+pub struct ClarificationQuestion {
+    /// The question text
+    pub question: String,
+    /// Predefined options to choose from
+    pub options: Vec<String>,
 }
 
 /// Keyboard event for TUI input
@@ -165,6 +176,7 @@ pub enum Key {
     Up,
     Down,
     Char(char),
+    Backspace,
     Esc,
     Question,
     Enter,

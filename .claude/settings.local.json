@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(~/.local/bin/matrix.exe --help)",
-      "Bash(cargo run:*)"
+      "Bash(cargo run:*)",
+      "Bash(git config:*)",
+      "Bash(while read:*)",
+      "Bash(do git:*)",
+      "Bash(echo \"$h\")",
+      "Bash(done)"
     ]
   }
 }

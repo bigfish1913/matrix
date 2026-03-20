@@ -1,16 +1,18 @@
 //! TUI Application state and main loop.
 
 use crate::models::TaskStatus;
-use crate::tui::{Event, EventReceiver, ExecutionState, Key, LogBuffer, VerbosityLevel};
+use crate::tui::{ClarificationQuestion, Event, EventReceiver, ExecutionState, Key, LogBuffer, VerbosityLevel};
 use std::time::{Duration, Instant};
 
-/// State for clarification questions dialog
+/// State for clarification questions dialog (multiple choice)
 #[derive(Debug, Default)]
 pub struct ClarificationState {
-    pub questions: Vec<String>,
+    pub questions: Vec<ClarificationQuestion>,
     pub answers: Vec<String>,
     pub current_index: usize,
-    pub current_input: String,
+    pub selected_option: usize,  // Currently highlighted option
+    pub custom_input: String,    // For "Other" option
+    pub is_custom_input: bool,   // Whether user is typing custom input
     pub response_tx: Option<crate::tui::event::AnswerSender>,
 }
 
@@ -24,7 +26,24 @@ impl ClarificationState {
         self.questions.clear();
         self.answers.clear();
         self.current_index = 0;
-        self.current_input.clear();
+        self.selected_option = 0;
+        self.custom_input.clear();
+        self.is_custom_input = false;
+    }
+
+    /// Get total number of options for current question (including "Other")
+    pub fn total_options(&self) -> usize {
+        if let Some(q) = self.questions.get(self.current_index) {
+            q.options.len() + 1 // +1 for "Other" option
+        } else {
+            0
+        }
+    }
+
+    /// Check if "Other" option is selected
+    pub fn is_other_selected(&self) -> bool {
+        let total = self.total_options();
+        total > 0 && self.selected_option == total - 1
     }
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -86,7 +105,11 @@ pub struct TuiApp {
     pub completed_count: usize,
     pub total_count: usize,
     pub failed_count: usize,
-    pub start_time: Option<Instant>,
+    pub start_time: Option<Instant>,        // Total elapsed time
+    pub task_start_time: Option<Instant>,   // Current task elapsed time
+
+    // Animation
+    pub spinner_frame: usize,              // Current spinner frame
 
     // Tasks
     pub tasks: Vec<TaskDisplay>,
@@ -130,6 +153,8 @@ impl TuiApp {
             total_count: 0,
             failed_count: 0,
             start_time: None,
+            task_start_time: None,
+            spinner_frame: 0,
             tasks: Vec::new(),
             tasks_scroll: 0,
             output_lines: Vec::new(),
@@ -197,47 +222,112 @@ impl TuiApp {
         }
     }
 
-    /// Handle keyboard input during clarification questions
+    /// Handle keyboard input during clarification questions (multiple choice)
     fn handle_clarification_key(&mut self, key: Key) {
-        match key {
-            Key::Enter => {
-                // Save current answer and move to next question
-                let answer = self.clarification.current_input.clone();
-                if answer.trim().is_empty() {
-                    self.clarification.answers.push(String::new());
-                } else {
-                    self.clarification.answers.push(answer);
-                }
-                self.clarification.current_index += 1;
-                self.clarification.current_input.clear();
+        let total_options = self.clarification.total_options();
 
-                // Check if all questions are answered
-                if self.clarification.current_index >= self.clarification.questions.len() {
-                    // Send answers back to orchestrator
+        if self.clarification.is_custom_input {
+            // User is typing custom input for "Other" option
+            match key {
+                Key::Enter => {
+                    // Save custom input and move to next question
+                    let answer = self.clarification.custom_input.clone();
+                    self.clarification.answers.push(answer);
+                    self.clarification.current_index += 1;
+                    self.clarification.custom_input.clear();
+                    self.clarification.is_custom_input = false;
+                    self.clarification.selected_option = 0;
+
+                    // Check if all questions answered
+                    if self.clarification.current_index >= self.clarification.questions.len() {
+                        if let Some(tx) = self.clarification.response_tx.take() {
+                            let _ = tx.send(self.clarification.answers.clone());
+                        }
+                        self.clarification.finish();
+                    }
+                }
+                Key::Char(c) => {
+                    self.clarification.custom_input.push(c);
+                }
+                Key::Backspace => {
+                    self.clarification.custom_input.pop();
+                }
+                Key::Esc => {
+                    // Cancel custom input, go back to selection
+                    self.clarification.is_custom_input = false;
+                    self.clarification.custom_input.clear();
+                }
+                _ => {}
+            }
+        } else {
+            // Normal selection mode
+            match key {
+                Key::Up => {
+                    if self.clarification.selected_option > 0 {
+                        self.clarification.selected_option -= 1;
+                    }
+                }
+                Key::Down => {
+                    if self.clarification.selected_option < total_options - 1 {
+                        self.clarification.selected_option += 1;
+                    }
+                }
+                Key::Char(c) if c.is_ascii_digit() => {
+                    // Direct selection by number (1-9)
+                    let num = c.to_digit(10).unwrap() as usize;
+                    if num > 0 && num <= total_options {
+                        self.clarification.selected_option = num - 1;
+                        // Auto-confirm selection
+                        self.confirm_clarification_option();
+                    }
+                }
+                Key::Enter => {
+                    self.confirm_clarification_option();
+                }
+                Key::Esc => {
+                    // Cancel all questions - send empty answers
                     if let Some(tx) = self.clarification.response_tx.take() {
-                        let _ = tx.send(self.clarification.answers.clone());
+                        let empty_answers: Vec<String> =
+                            std::iter::repeat(String::new())
+                                .take(self.clarification.questions.len())
+                                .collect();
+                        let _ = tx.send(empty_answers);
                     }
                     self.clarification.finish();
                 }
+                _ => {}
             }
-            Key::Char(c) => {
-                self.clarification.current_input.push(c);
-            }
-            Key::Esc => {
-                // Cancel clarification - send empty answers
+        }
+    }
+
+    /// Confirm current selection and move to next question
+    fn confirm_clarification_option(&mut self) {
+        if self.clarification.is_other_selected() {
+            // "Other" selected - switch to custom input mode
+            self.clarification.is_custom_input = true;
+        } else {
+            // Regular option selected
+            let answer = if let Some(q) = self.clarification.questions.get(self.clarification.current_index) {
+                if self.clarification.selected_option < q.options.len() {
+                    q.options[self.clarification.selected_option].clone()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            self.clarification.answers.push(answer);
+            self.clarification.current_index += 1;
+            self.clarification.selected_option = 0;
+
+            // Check if all questions answered
+            if self.clarification.current_index >= self.clarification.questions.len() {
                 if let Some(tx) = self.clarification.response_tx.take() {
-                    let empty_answers: Vec<String> =
-                        std::iter::repeat(String::new())
-                            .take(self.clarification.questions.len())
-                            .collect();
-                    let _ = tx.send(empty_answers);
+                    let _ = tx.send(self.clarification.answers.clone());
                 }
                 self.clarification.finish();
             }
-            Key::BackTab => {
-                self.clarification.current_input.pop();
-            }
-            _ => {}
         }
     }
 
@@ -337,11 +427,13 @@ impl TuiApp {
                 self.completed_count = self.tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
                 self.failed_count = self.tasks.iter().filter(|t| t.status == TaskStatus::Failed).count();
 
-                // Track current task
+                // Track current task and task start time
                 if status == TaskStatus::InProgress {
                     self.current_task_id = Some(id.clone());
+                    self.task_start_time = Some(Instant::now());  // Reset task timer
                 } else if self.current_task_id.as_ref() == Some(&id) {
                     self.current_task_id = None;
+                    self.task_start_time = None;  // Clear task timer
                 }
             }
             Event::TaskProgress { id, message } => {
@@ -382,7 +474,8 @@ impl TuiApp {
             }
             Event::ExecutionStateChanged { state } => {
                 self.state = state;
-                if state == ExecutionState::Running && self.start_time.is_none() {
+                // Start timer on any non-idle state (Clarifying, Running, etc.)
+                if state != ExecutionState::Idle && self.start_time.is_none() {
                     self.start_time = Some(Instant::now());
                 }
             }
@@ -399,7 +492,9 @@ impl TuiApp {
                 self.clarification.questions = questions;
                 self.clarification.answers = Vec::new();
                 self.clarification.current_index = 0;
-                self.clarification.current_input = String::new();
+                self.clarification.selected_option = 0;
+                self.clarification.custom_input.clear();
+                self.clarification.is_custom_input = false;
                 self.clarification.response_tx = Some(response_tx);
             }
         }

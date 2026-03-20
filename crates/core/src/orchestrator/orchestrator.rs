@@ -7,7 +7,7 @@ use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::models::{Complexity, Task, TaskStatus};
 use crate::store::TaskStore;
 use crate::tui::event::AnswerSender;
-use crate::tui::{Event, EventSender, ExecutionState};
+use crate::tui::{ClarificationQuestion, Event, EventSender, ExecutionState};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -115,6 +115,10 @@ impl Orchestrator {
 
         // Phase 0: Interactive clarification (optional)
         let clarification = if self.config.ask_mode && !self.config.resume {
+            // Emit Clarifying state before asking questions
+            self.emit_event(Event::ExecutionStateChanged {
+                state: ExecutionState::Clarifying,
+            });
             self.clarify_goal().await?
         } else {
             String::new()
@@ -169,14 +173,14 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Phase 0: Interactive clarification
+    /// Phase 0: Interactive clarification with multiple choice questions
     async fn clarify_goal(&self) -> Result<String> {
         info!("Generating clarifying questions...");
 
         let lang_instruction = match self.config.language.as_str() {
-            "zh" => "请用中文提问。",
-            "en" => "Please ask questions in English.",
-            _ => "请用中文提问。",
+            "zh" => "请用中文提问，选项也用中文。",
+            "en" => "Please ask questions and provide options in English.",
+            _ => "请用中文提问，选项也用中文。",
         };
 
         let prompt = format!(
@@ -188,9 +192,21 @@ GOAL: {}
 {}
 
 Generate 3-5 concise, targeted clarifying questions.
+For each question, provide 3-4 common options to choose from.
 
-Respond ONLY with JSON:
-{{"questions": ["Question 1?", "Question 2?", "Question 3?"]}}"#,
+Respond ONLY with JSON array:
+[
+  {{
+    "question": "Question text?",
+    "options": ["Option 1", "Option 2", "Option 3"]
+  }}
+]
+
+Example:
+[
+  {{"question": "项目使用什么编程语言?", "options": ["Rust", "Python", "JavaScript", "Go"]}},
+  {{"question": "是否需要数据库支持?", "options": ["是，需要", "不需要", "不确定"]}}
+]"#,
             self.config.goal,
             self.config
                 .doc_content
@@ -211,17 +227,27 @@ Respond ONLY with JSON:
             return Ok(String::new());
         }
 
-        let questions: ClarificationResponse = match serde_json::from_str(&result.text) {
+        // Parse questions with options
+        let raw_questions: Vec<RawQuestion> = match serde_json::from_str(&result.text) {
             Ok(q) => q,
             Err(_) => return Ok(String::new()),
         };
+
+        // Convert to ClarificationQuestion
+        let questions: Vec<ClarificationQuestion> = raw_questions
+            .into_iter()
+            .map(|rq| ClarificationQuestion {
+                question: rq.question,
+                options: rq.options,
+            })
+            .collect();
 
         // Check if in TUI mode
         if let Some(ref sender) = self.config.event_sender {
             // TUI mode: send questions via event channel and wait for answers
             let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
             let _ = sender.send(Event::ClarificationQuestions {
-                questions: questions.questions.clone(),
+                questions: questions.clone(),
                 response_tx: AnswerSender::new(tx),
             });
 
@@ -232,10 +258,9 @@ Respond ONLY with JSON:
                         return Ok(String::new());
                     }
                     let formatted: Vec<String> = questions
-                        .questions
                         .iter()
                         .zip(answers.iter())
-                        .map(|(q, a)| format!("Q: {}\nA: {}", q, if a.is_empty() { "(skipped)" } else { a }))
+                        .map(|(q, a)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
                         .collect();
                     return Ok(formatted.join("\n\n"));
                 }
@@ -250,33 +275,43 @@ Respond ONLY with JSON:
             }
         }
 
-        // Non-TUI mode: use stdin/stdout
+        // Non-TUI mode: use stdin/stdout with simple text input
         println!("\n[?] Clarifying Questions\n");
 
         let mut answers: Vec<String> = Vec::new();
-        for (i, question) in questions.questions.iter().enumerate() {
+        for (i, q) in questions.iter().enumerate() {
             use std::io::{self, Write};
-            print!("  [{}] {} (press Enter to skip): ", i + 1, question);
+            println!("  [{}] {}", i + 1, q.question);
+            for (j, opt) in q.options.iter().enumerate() {
+                println!("      {}. {}", j + 1, opt);
+            }
+            print!("      Your choice (1-{} or type custom answer): ", q.options.len());
             io::stdout().flush().unwrap();
 
             let mut input = String::new();
             if io::stdin().read_line(&mut input).is_ok() {
-                let answer = input.trim();
-                if answer.is_empty() {
-                    answers.push(format!("Q{}: {} (skipped)", i + 1, question));
+                let input = input.trim();
+                // Check if it's a number selection
+                if let Ok(num) = input.parse::<usize>() {
+                    if num > 0 && num <= q.options.len() {
+                        answers.push(q.options[num - 1].clone());
+                    } else {
+                        answers.push(input.to_string());
+                    }
+                } else if !input.is_empty() {
+                    answers.push(input.to_string());
                 } else {
-                    answers.push(format!("Q{}: {}\n    A: {}", i + 1, question, answer));
+                    answers.push(String::new());
                 }
-            } else {
-                answers.push(format!("Q{}: {} (skipped)", i + 1, question));
             }
         }
 
-        if answers.is_empty() {
-            return Ok(String::new());
-        }
-
-        Ok(answers.join("\n"))
+        let formatted: Vec<String> = questions
+            .iter()
+            .zip(answers.iter())
+            .map(|(q, a)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
+            .collect();
+        Ok(formatted.join("\n\n"))
     }
 
     async fn resume_tasks(&self) -> Result<()> {
@@ -913,9 +948,11 @@ struct TaskDefinition {
     depends_on: Vec<String>,
 }
 
+/// Raw question from AI response
 #[derive(Debug, serde::Deserialize)]
-struct ClarificationResponse {
-    questions: Vec<String>,
+struct RawQuestion {
+    question: String,
+    options: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]

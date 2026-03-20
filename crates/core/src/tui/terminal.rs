@@ -102,6 +102,7 @@ fn keycode_to_key(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
                 Some(Key::Tab)
             }
         }
+        KeyCode::Backspace => Some(Key::Backspace),
         KeyCode::Left => Some(Key::Left),
         KeyCode::Right => Some(Key::Right),
         KeyCode::Up => Some(Key::Up),
@@ -116,42 +117,48 @@ fn keycode_to_key(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
 
 /// Create event stream for TUI
 pub fn event_stream() -> impl Stream<Item = TuiEvent> {
-    let tick_rate = Duration::from_millis(250);
+    let tick_rate = Duration::from_millis(200);
 
     async_stream::stream! {
         let mut reader = EventStream::new();
         let mut tick = tokio::time::interval(tick_rate);
         let mut last_key: Option<(KeyCode, std::time::Instant)> = None;
-        let key_repeat_delay = Duration::from_millis(150); // Increased debounce for Windows terminals
+        let key_repeat_delay = Duration::from_millis(150);
 
         loop {
             tokio::select! {
-                // Keyboard events
-                Some(Ok(event)) = reader.next() => {
-                    if let Event::Key(key) = event {
-                        // Handle Ctrl+C to quit
-                        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                            yield TuiEvent::Key(Key::Char('q'));
-                            continue;
-                        }
+                // Keyboard events with timeout
+                result = async {
+                    tokio::time::timeout(Duration::from_millis(50), reader.next()).await
+                } => {
+                    match result {
+                        Ok(Some(Ok(event))) => {
+                            if let Event::Key(key) = event {
+                                // Handle Ctrl+C to quit
+                                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                                    yield TuiEvent::Key(Key::Char('q'));
+                                    continue;
+                                }
 
-                        // Debounce at the raw key level - check if this is a repeat of the same raw key
-                        let now = std::time::Instant::now();
-                        if let Some((last_code, last_time)) = last_key {
-                            if last_code == key.code && now.duration_since(last_time) < key_repeat_delay {
-                                // Skip this duplicate key event
-                                continue;
+                                // Debounce
+                                let now = std::time::Instant::now();
+                                if let Some((last_code, last_time)) = last_key {
+                                    if last_code == key.code && now.duration_since(last_time) < key_repeat_delay {
+                                        continue;
+                                    }
+                                }
+                                last_key = Some((key.code, now));
+
+                                if let Some(k) = keycode_to_key(key.code, key.modifiers) {
+                                    yield TuiEvent::Key(k);
+                                }
                             }
                         }
-                        last_key = Some((key.code, now));
-
-                        if let Some(k) = keycode_to_key(key.code, key.modifiers) {
-                            yield TuiEvent::Key(k);
-                        }
+                        _ => {} // Timeout or error, continue
                     }
                 }
 
-                // Tick events
+                // Tick events - always responsive
                 _ = tick.tick() => {
                     yield TuiEvent::Tick;
                 }

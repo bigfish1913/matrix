@@ -242,9 +242,11 @@ async fn run_tui_loop(
                         });
                     }
                     TuiEvent::Tick => {
+                        // Update spinner animation
+                        app.spinner_frame = (app.spinner_frame + 1) % 5;
                         // Poll for new orchestrator events
                         app.poll_events();
-                        // Always redraw on tick to update elapsed time
+                        // Always redraw on tick to update elapsed time and animation
                         let _ = terminal.draw(|frame| {
                             render_app(frame, app);
                         });

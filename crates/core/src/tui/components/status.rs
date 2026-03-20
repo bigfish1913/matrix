@@ -6,12 +6,16 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use std::time::Duration;
+
+/// Spinner frames for animation
+const SPINNER_FRAMES: &[&str] = &["⠋ ", "⠙ ", "⠚ ", "⠞ ", "⠟ "];
 
 /// Status bar component
 pub struct StatusBar;
 
 impl StatusBar {
-    /// Render status bar
+    /// Render status bar with spinner animation and split time display
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         state: ExecutionState,
@@ -19,17 +23,30 @@ impl StatusBar {
         completed: usize,
         total: usize,
         failed: usize,
-        elapsed: &str,
+        total_elapsed: &str,
+        task_elapsed: &Duration,
+        spinner_frame: usize,
         model: &str,
         verbosity: VerbosityLevel,
         version: &str,
     ) -> Paragraph<'static> {
         let state_color = match state {
             ExecutionState::Idle => Color::Gray,
+            ExecutionState::Clarifying => Color::Magenta,
             ExecutionState::Generating => Color::Cyan,
             ExecutionState::Running => Color::Yellow,
             ExecutionState::Completed => Color::Green,
             ExecutionState::Failed => Color::Red,
+        };
+
+        // Get spinner character based on state and frame
+        let spinner = if state == ExecutionState::Generating
+            || state == ExecutionState::Clarifying
+            || state == ExecutionState::Running
+        {
+            SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()]
+        } else {
+            ""
         };
 
         let progress = if total > 0 {
@@ -44,9 +61,21 @@ impl StatusBar {
             String::new()
         };
 
-        let task_str = current_task
-            .map(|t| format!(" | {}", t))
-            .unwrap_or_default();
+        // Format task elapsed time
+        let task_elapsed_str = format_duration(*task_elapsed);
+
+        // Build task string with spinner
+        let task_str = if let Some(t) = current_task {
+            if !spinner.is_empty() {
+                format!(" {} {}", spinner, t)
+            } else {
+                format!(" {}", t)
+            }
+        } else if !spinner.is_empty() {
+            format!(" {} ", spinner)
+        } else {
+            String::new()
+        };
 
         let verbosity_str = match verbosity {
             VerbosityLevel::Quiet => "Q",
@@ -55,15 +84,18 @@ impl StatusBar {
         };
 
         let line = Line::from(vec![
-            Span::styled(format!("v{} | ", version), Style::default().fg(Color::Cyan)),
-            Span::styled("Status: ", Style::default().fg(Color::Gray)),
+            Span::styled(format!("v{} ", version), Style::default().fg(Color::Cyan)),
             Span::styled(state.to_string(), Style::default().fg(state_color).add_modifier(Modifier::BOLD)),
-            Span::styled(task_str, Style::default().fg(Color::Cyan)),
+            Span::styled(task_str, Style::default().fg(Color::White)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Task:", Style::default().fg(Color::DarkGray)),
+            Span::styled(task_elapsed_str, Style::default().fg(Color::Yellow)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Total:", Style::default().fg(Color::DarkGray)),
+            Span::styled(total_elapsed.to_string(), Style::default().fg(Color::Green)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(progress, Style::default().fg(Color::White)),
             Span::styled(failed_str, Style::default().fg(Color::Red)),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(elapsed.to_string(), Style::default().fg(Color::White)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(model.to_string(), Style::default().fg(Color::Magenta)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
@@ -74,4 +106,12 @@ impl StatusBar {
 
         Paragraph::new(line)
     }
+}
+
+/// Format duration as MM:SS
+fn format_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    let mins = secs / 60;
+    let secs = secs % 60;
+    format!("{:02}:{:02}", mins, secs)
 }
