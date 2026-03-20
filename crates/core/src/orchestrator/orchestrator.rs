@@ -189,7 +189,7 @@ impl Orchestrator {
 
     /// Phase 0: Interactive clarification with multiple choice questions
     async fn clarify_goal(&self) -> Result<String> {
-        info!("Generating clarifying questions...");
+        info!("Phase 0: Starting clarification...");
 
         let lang_instruction = match self.config.language.as_str() {
             "zh" => "请用中文提问，选项也用中文。优缺点和推荐理由也用中文。",
@@ -256,14 +256,25 @@ Example:
             .await?;
 
         if result.is_error {
-            warn!("Could not generate clarifying questions");
+            warn!("Could not generate clarifying questions: {}", result.text);
             return Ok(String::new());
         }
 
+        // Log raw response for debugging
+        info!("Clarification response length: {} chars", result.text.len());
+        debug!("Clarification response: {}", result.text);
+
         // Parse questions with options
         let raw_questions: Vec<RawQuestion> = match serde_json::from_str(&result.text) {
-            Ok(q) => q,
-            Err(_) => return Ok(String::new()),
+            Ok(q) => {
+                info!("Parsed {} clarification questions", q.len());
+                q
+            }
+            Err(e) => {
+                warn!("Failed to parse clarification questions JSON: {}", e);
+                info!("Raw response: {}", result.text);
+                return Ok(String::new());
+            }
         };
 
         // Convert to ClarificationQuestion
@@ -282,6 +293,7 @@ Example:
         // Check if in TUI mode
         if let Some(ref sender) = self.config.event_sender {
             // TUI mode: send questions via event channel and wait for answers
+            info!("Sending {} clarification questions to TUI...", questions.len());
             let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
             let _ = sender.send(Event::ClarificationQuestions {
                 questions: questions.clone(),
@@ -289,9 +301,12 @@ Example:
             });
 
             // Wait for answers from TUI (with timeout in case TUI is closed)
+            info!("Waiting for TUI clarification answers...");
             match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {
                 Ok(Ok(answers)) => {
+                    info!("Received {} answers from TUI", answers.len());
                     if answers.is_empty() || answers.iter().all(|a| a.trim().is_empty()) {
+                        warn!("All answers are empty, skipping clarification");
                         return Ok(String::new());
                     }
                     let formatted: Vec<String> = questions
@@ -299,6 +314,7 @@ Example:
                         .zip(answers.iter())
                         .map(|(q, a)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
                         .collect();
+                    info!("Clarification completed successfully");
                     return Ok(formatted.join("\n\n"));
                 }
                 Ok(Err(_)) => {

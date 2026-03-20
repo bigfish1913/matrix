@@ -43,10 +43,6 @@ struct Args {
     #[arg(short = 'n', long, default_value = "1")]
     agents: usize,
 
-    /// Stream Claude's live output (verbose)
-    #[arg(long)]
-    debug: bool,
-
     /// Skip clarifying questions before planning
     #[arg(short = 'Q', long = "no-ask")]
     no_ask: bool,
@@ -63,7 +59,7 @@ struct Args {
     #[arg(short, long)]
     quiet: bool,
 
-    /// Verbose mode: detailed Claude output
+    /// Verbose mode: detailed Claude output with debug logs
     #[arg(short, long)]
     verbose: bool,
 }
@@ -169,7 +165,7 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
         doc_content,
         mcp_config: args.mcp_config.clone(),
         num_agents: args.agents,
-        debug_mode: args.debug,
+        debug_mode: args.verbose,
         ask_mode: !args.no_ask,
         resume: args.resume,
         event_sender: Some(event_sender),
@@ -328,7 +324,7 @@ async fn run_simple(args: &Args) -> anyhow::Result<()> {
         doc_content,
         mcp_config: args.mcp_config.clone(),
         num_agents: args.agents,
-        debug_mode: args.debug,
+        debug_mode: args.verbose,
         ask_mode: !args.no_ask,
         resume: args.resume,
         event_sender: None,

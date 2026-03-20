@@ -542,6 +542,9 @@ impl TuiApp {
 
                     // Check if all questions answered
                     if self.clarification.current_index >= self.clarification.questions.len() {
+                        // Log summary of Q&A to log panel
+                        self.log_clarification_summary();
+
                         if let Some(tx) = self.clarification.response_tx.take() {
                             let _ = tx.send(self.clarification.answers.clone());
                         }
@@ -625,11 +628,40 @@ impl TuiApp {
 
             // Check if all questions answered
             if self.clarification.current_index >= self.clarification.questions.len() {
+                // Log summary of Q&A to log panel
+                self.log_clarification_summary();
+
                 if let Some(tx) = self.clarification.response_tx.take() {
                     let _ = tx.send(self.clarification.answers.clone());
                 }
                 self.clarification.finish();
             }
+        }
+    }
+
+    /// Log summary of clarification Q&A to log panel
+    fn log_clarification_summary(&mut self) {
+        use crate::tui::LogLevel;
+
+        self.log_buffer.push(LogLevel::Info, "━━━ Clarification Summary ━━━".to_string());
+
+        for (i, question) in self.clarification.questions.iter().enumerate() {
+            let answer = self.clarification.answers.get(i).map(|s| s.as_str()).unwrap_or("(skipped)");
+            let truncated_q: String = question.question.chars().take(50).collect();
+            let q_display = if truncated_q.len() < question.question.len() {
+                format!("{}...", truncated_q)
+            } else {
+                question.question.clone()
+            };
+            self.log_buffer.push(LogLevel::Info, format!("Q{}: {}", i + 1, q_display));
+            self.log_buffer.push(LogLevel::Info, format!("  → {}", answer));
+        }
+
+        self.log_buffer.push(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string());
+
+        // Auto-scroll logs to show summary
+        if self.logs_auto_follow {
+            self.logs_scroll = u16::MAX;
         }
     }
 
