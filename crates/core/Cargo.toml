@@ -21,6 +21,7 @@ ratatui.workspace = true
 crossterm.workspace = true
 futures.workspace = true
 async-stream.workspace = true
+pulldown-cmark.workspace = true
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 pub mod app;
 pub mod components;
 pub mod event;
+pub mod markdown;
 pub mod render;
 pub mod terminal;
 pub mod tracing_layer;

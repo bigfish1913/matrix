@@ -2,6 +2,7 @@
 
 use crate::tui::app::TuiApp;
 use crate::tui::components::{LogsPanel, OutputPanel, StatusBar, TabSwitcher, TasksPanel};
+use crate::tui::markdown::render_markdown;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -146,6 +147,7 @@ fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
 
     let clarification = &app.clarification;
     let mut lines: Vec<Line> = Vec::new();
+    let width = area.width.saturating_sub(4) as usize; // Account for borders
 
     // Header
     lines.push(Line::from(vec![
@@ -162,10 +164,31 @@ fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
             } else {
                 ""
             };
-            lines.push(Line::from(vec![
-                Span::styled("✓ ", Style::default().fg(Color::Green)),
-                Span::styled(&q.question, Style::default().fg(Color::DarkGray)),
-            ]));
+
+            // Render question as markdown
+            let q_lines = render_markdown(&q.question, width);
+            if q_lines.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("✓ ", Style::default().fg(Color::Green)),
+                    Span::styled(&q.question, Style::default().fg(Color::DarkGray)),
+                ]));
+            } else {
+                for (idx, q_line) in q_lines.into_iter().enumerate() {
+                    let mut spans: Vec<Span> = Vec::new();
+                    if idx == 0 {
+                        spans.push(Span::styled("✓ ", Style::default().fg(Color::Green)));
+                    } else {
+                        spans.push(Span::raw("  "));
+                    }
+                    // Dim the question
+                    for span in q_line.spans {
+                        spans.push(Span::styled(span.content, Style::default().fg(Color::DarkGray)));
+                    }
+                    lines.push(Line::from(spans));
+                }
+            }
+
+            // Answer
             lines.push(Line::from(vec![
                 Span::raw("    "),
                 Span::styled("→ ", Style::default().fg(Color::Green)),
@@ -173,15 +196,38 @@ fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
             ]));
             lines.push(Line::from(""));
         } else if i == clarification.current_index {
-            // Current question
+            // Current question - render as markdown with highlight
+            let q_lines = render_markdown(&q.question, width);
             let highlight_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-            lines.push(Line::from(vec![
-                Span::styled("▶ ", highlight_style),
-                Span::styled(&q.question, highlight_style),
-            ]));
+
+            if q_lines.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("▶ ", highlight_style),
+                    Span::styled(&q.question, highlight_style),
+                ]));
+            } else {
+                for (idx, q_line) in q_lines.into_iter().enumerate() {
+                    let mut spans: Vec<Span> = Vec::new();
+                    if idx == 0 {
+                        spans.push(Span::styled("▶ ", highlight_style));
+                    } else {
+                        spans.push(Span::raw("  "));
+                    }
+                    // Apply highlight style to all spans
+                    for span in q_line.spans {
+                        let styled = if span.style.fg.is_none() {
+                            Span::styled(span.content, highlight_style)
+                        } else {
+                            span
+                        };
+                        spans.push(styled);
+                    }
+                    lines.push(Line::from(spans));
+                }
+            }
             lines.push(Line::from(""));
 
-            // Show options
+            // Show options with markdown support
             for (opt_idx, opt) in q.options.iter().enumerate() {
                 let is_selected = clarification.selected_option == opt_idx;
                 let prefix = if is_selected { "  ◉ " } else { "  ○ " };
@@ -191,11 +237,42 @@ fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(num, Style::default().fg(Color::Cyan)),
-                    Span::styled(opt.clone(), style),
-                ]));
+
+                // Render option as markdown
+                let opt_lines = render_markdown(opt, width.saturating_sub(6));
+                if opt_lines.is_empty() || opt_lines.len() == 1 {
+                    // Single line or empty - render inline
+                    let opt_text = if opt_lines.is_empty() {
+                        opt.clone()
+                    } else {
+                        opt_lines[0].spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix, style),
+                        Span::styled(num, Style::default().fg(Color::Cyan)),
+                        Span::styled(opt_text, style),
+                    ]));
+                } else {
+                    // Multi-line markdown
+                    for (line_idx, opt_line) in opt_lines.into_iter().enumerate() {
+                        if line_idx == 0 {
+                            let mut spans = vec![
+                                Span::styled(prefix, style),
+                                Span::styled(num.clone(), Style::default().fg(Color::Cyan)),
+                            ];
+                            for span in opt_line.spans {
+                                spans.push(Span::styled(span.content, style));
+                            }
+                            lines.push(Line::from(spans));
+                        } else {
+                            let mut spans = vec![Span::raw("       ")]; // Align with option text
+                            for span in opt_line.spans {
+                                spans.push(Span::styled(span.content, style));
+                            }
+                            lines.push(Line::from(spans));
+                        }
+                    }
+                }
             }
 
             // "Other" option
@@ -235,11 +312,28 @@ fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
 
             lines.push(Line::from(""));
         } else {
-            // Future question
-            lines.push(Line::from(vec![
-                Span::styled("○ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&q.question, Style::default().fg(Color::DarkGray)),
-            ]));
+            // Future question - render as markdown dimmed
+            let q_lines = render_markdown(&q.question, width);
+
+            if q_lines.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("○ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&q.question, Style::default().fg(Color::DarkGray)),
+                ]));
+            } else {
+                for (idx, q_line) in q_lines.into_iter().enumerate() {
+                    let mut spans: Vec<Span> = Vec::new();
+                    if idx == 0 {
+                        spans.push(Span::styled("○ ", Style::default().fg(Color::DarkGray)));
+                    } else {
+                        spans.push(Span::raw("  "));
+                    }
+                    for span in q_line.spans {
+                        spans.push(Span::styled(span.content, Style::default().fg(Color::DarkGray)));
+                    }
+                    lines.push(Line::from(spans));
+                }
+            }
             lines.push(Line::from(""));
         }
     }
