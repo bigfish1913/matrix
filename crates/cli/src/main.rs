@@ -47,9 +47,9 @@ struct Args {
     #[arg(long)]
     debug: bool,
 
-    /// Ask clarifying questions before planning (default: true)
-    #[arg(short, long, default_value = "true")]
-    ask: bool,
+    /// Skip clarifying questions before planning
+    #[arg(short = 'Q', long = "no-ask")]
+    no_ask: bool,
 
     /// Language for AI prompts (default: zh, options: zh, en)
     #[arg(short = 'L', long, default_value = "zh")]
@@ -170,7 +170,7 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
         mcp_config: args.mcp_config.clone(),
         num_agents: args.agents,
         debug_mode: args.debug,
-        ask_mode: args.ask,
+        ask_mode: !args.no_ask,
         resume: args.resume,
         event_sender: Some(event_sender),
         language: args.lang.clone(),
@@ -261,8 +261,8 @@ async fn run_tui_loop(
                 std::process::exit(130);
             }
 
-            // Check if orchestrator finished
-            result = &mut orchestrator_handle => {
+            // Check if orchestrator finished (only poll if not completed)
+            result = &mut orchestrator_handle, if !orchestrator_completed => {
                 app.poll_events();
 
                 match result {
@@ -329,7 +329,7 @@ async fn run_simple(args: &Args) -> anyhow::Result<()> {
         mcp_config: args.mcp_config.clone(),
         num_agents: args.agents,
         debug_mode: args.debug,
-        ask_mode: args.ask,
+        ask_mode: !args.no_ask,
         resume: args.resume,
         event_sender: None,
         language: args.lang.clone(),

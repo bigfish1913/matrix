@@ -7,7 +7,7 @@ use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::models::{Complexity, Task, TaskStatus};
 use crate::store::TaskStore;
 use crate::tui::event::AnswerSender;
-use crate::tui::{ClarificationQuestion, Event, EventSender, ExecutionState};
+use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -125,10 +125,24 @@ impl Orchestrator {
         };
 
         // Phase 1: Generate or resume tasks
-        if self.store.total().await? > 0 {
-            self.resume_tasks().await?;
+        let total = self.store.total().await?;
+        if total > 0 {
+            // Found existing tasks - ask user whether to resume or start fresh
+            let should_resume = self.confirm_resume().await?;
+            if should_resume {
+                self.resume_tasks().await?;
+            } else {
+                // Clear existing tasks and start fresh
+                info!("Clearing existing tasks and starting fresh...");
+                self.store.clear().await?;
+                // Emit Generating state before task generation
+                self.emit_event(Event::ExecutionStateChanged {
+                    state: ExecutionState::Generating,
+                });
+                self.generate_tasks(&clarification).await?;
+            }
         } else {
-            // Emit Generating state before task generation
+            // No existing tasks - generate new ones
             self.emit_event(Event::ExecutionStateChanged {
                 state: ExecutionState::Generating,
             });
@@ -314,6 +328,58 @@ Example:
         Ok(formatted.join("\n\n"))
     }
 
+    /// Ask user to confirm whether to resume or start fresh
+    async fn confirm_resume(&self) -> Result<bool> {
+        let completed = self.store.count(TaskStatus::Completed).await?;
+        let pending = self.store.count(TaskStatus::Pending).await?;
+        let failed = self.store.count(TaskStatus::Failed).await?;
+
+        // Check if in TUI mode
+        if let Some(ref sender) = self.config.event_sender {
+            // TUI mode: send confirmation request via event channel and wait for response
+            let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+            let _ = sender.send(Event::ResumeConfirm {
+                completed,
+                pending,
+                failed,
+                response_tx: ConfirmSender::new(tx),
+            });
+
+            // Wait for user response (with timeout)
+            match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {
+                Ok(Ok(confirmed)) => {
+                    info!(resume = confirmed, "User chose resume option");
+                    return Ok(confirmed);
+                }
+                Ok(Err(_)) => {
+                    warn!("Failed to receive resume confirmation from TUI");
+                    return Ok(true);  // Default to resume
+                }
+                Err(_) => {
+                    warn!("Timeout waiting for resume confirmation from TUI");
+                    return Ok(true);  // Default to resume
+                }
+            }
+        }
+
+        // Non-TUI mode: use stdin/stdout for confirmation
+        use std::io::{self, Write};
+        println!("\n[!] Found existing tasks:");
+        println!("    Completed: {} | Pending: {} | Failed: {}", completed, pending, failed);
+        println!();
+        print!("    Resume from existing tasks? [Y/n]: ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_ok() {
+            let input = input.trim().to_lowercase();
+            // Default to resume (empty input or 'y')
+            return Ok(input.is_empty() || input == "y" || input == "yes");
+        }
+
+        Ok(true)  // Default to resume
+    }
+
     async fn resume_tasks(&self) -> Result<()> {
         let total = self.store.total().await?;
         let completed = self.store.count(TaskStatus::Completed).await?;
@@ -354,7 +420,11 @@ PROJECT GOAL: {}
 CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, just the JSON object.
 Do NOT include any text before or after the JSON.
 
-Generate 3-10 tasks using this EXACT format:
+IMPORTANT: Generate as many tasks as needed at the SMALLEST possible granularity.
+Each task should be completable in a single coding session (30-60 minutes).
+Do NOT limit the number of tasks - use as many as necessary for complete coverage.
+
+Use this EXACT format:
 {{"tasks": [{{"id": "task-001", "title": "Short title", "description": "Detailed description", "depends_on": []}}]}}
 
 Example response:
@@ -447,7 +517,11 @@ CURRENT DEPTH: {} / {}
 
 {}
 
-Is this task SIMPLE (doable in one claude session) or COMPLEX (needs splitting)?
+Is this task SIMPLE (completable in 30-60 minutes) or COMPLEX (needs splitting)?
+
+IMPORTANT: If splitting, create as many subtasks as needed at the SMALLEST possible granularity.
+Each subtask should be completable in a single coding session (30-60 minutes).
+Do NOT limit the number of subtasks.
 
 Respond ONLY with JSON:
 {{"split": false, "reason": "..."}}

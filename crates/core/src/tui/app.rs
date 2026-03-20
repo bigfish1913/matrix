@@ -1,8 +1,28 @@
 //! TUI Application state and main loop.
 
 use crate::models::TaskStatus;
-use crate::tui::{ClarificationQuestion, Event, EventReceiver, ExecutionState, Key, LogBuffer, VerbosityLevel};
+use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventReceiver, ExecutionState, Key, LogBuffer, VerbosityLevel};
 use std::time::{Duration, Instant};
+
+/// State for resume confirmation dialog
+#[derive(Debug, Default)]
+pub struct ResumeConfirmState {
+    pub completed: usize,
+    pub pending: usize,
+    pub failed: usize,
+    pub selected: bool,  // true = Resume, false = Start Fresh
+    pub response_tx: Option<ConfirmSender>,
+}
+
+impl ResumeConfirmState {
+    pub fn is_active(&self) -> bool {
+        self.response_tx.is_some()
+    }
+
+    pub fn finish(&mut self) {
+        self.response_tx = None;
+    }
+}
 
 /// State for clarification questions dialog (multiple choice)
 #[derive(Debug, Default)]
@@ -141,6 +161,9 @@ pub struct TuiApp {
     // Clarification questions (ask mode)
     pub clarification: ClarificationState,
 
+    // Resume confirmation
+    pub resume_confirm: ResumeConfirmState,
+
     // Running flag
     pub running: bool,
 }
@@ -171,6 +194,7 @@ impl TuiApp {
             event_receiver: None,
             show_help: false,
             clarification: ClarificationState::default(),
+            resume_confirm: ResumeConfirmState::default(),
             running: true,
         }
     }
@@ -187,7 +211,13 @@ impl TuiApp {
 
     /// Handle keyboard input
     pub fn handle_key(&mut self, key: Key) {
-        // Handle clarification questions first
+        // Handle resume confirmation first
+        if self.resume_confirm.is_active() {
+            self.handle_resume_confirm_key(key);
+            return;
+        }
+
+        // Handle clarification questions
         if self.clarification.is_active() {
             self.handle_clarification_key(key);
             return;
@@ -220,6 +250,41 @@ impl TuiApp {
             }
             Key::Char('q') | Key::Esc => {
                 self.running = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle keyboard input during resume confirmation
+    fn handle_resume_confirm_key(&mut self, key: Key) {
+        match key {
+            Key::Left | Key::Right => {
+                self.resume_confirm.selected = !self.resume_confirm.selected;
+            }
+            Key::Char('y') | Key::Char('Y') => {
+                if let Some(tx) = self.resume_confirm.response_tx.take() {
+                    let _ = tx.send(true);
+                }
+                self.resume_confirm.finish();
+            }
+            Key::Char('n') | Key::Char('N') => {
+                if let Some(tx) = self.resume_confirm.response_tx.take() {
+                    let _ = tx.send(false);
+                }
+                self.resume_confirm.finish();
+            }
+            Key::Enter => {
+                if let Some(tx) = self.resume_confirm.response_tx.take() {
+                    let _ = tx.send(self.resume_confirm.selected);
+                }
+                self.resume_confirm.finish();
+            }
+            Key::Esc => {
+                // Default to resume on escape
+                if let Some(tx) = self.resume_confirm.response_tx.take() {
+                    let _ = tx.send(true);
+                }
+                self.resume_confirm.finish();
             }
             _ => {}
         }
@@ -502,6 +567,13 @@ impl TuiApp {
                 self.clarification.custom_input.clear();
                 self.clarification.is_custom_input = false;
                 self.clarification.response_tx = Some(response_tx);
+            }
+            Event::ResumeConfirm { completed, pending, failed, response_tx } => {
+                self.resume_confirm.completed = completed;
+                self.resume_confirm.pending = pending;
+                self.resume_confirm.failed = failed;
+                self.resume_confirm.selected = true;  // Default to Resume
+                self.resume_confirm.response_tx = Some(response_tx);
             }
         }
     }

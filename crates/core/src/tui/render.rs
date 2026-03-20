@@ -92,6 +92,12 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         render_help_overlay(frame);
     }
 
+    // Render resume confirmation dialog if active
+    if app.resume_confirm.is_active() {
+        render_resume_confirm_dialog(frame, app);
+        return;  // Don't render clarification if resume confirm is active
+    }
+
     // Render clarification dialog if active
     if app.clarification.is_active() {
         render_clarification_dialog(frame, app);
@@ -117,6 +123,82 @@ fn render_help_overlay(frame: &mut Frame) {
     let paragraph = Paragraph::new(help_text)
         .block(Block::default().borders(Borders::ALL).title(" Help "))
         .style(Style::default().fg(Color::Yellow));
+
+    frame.render_widget(paragraph, area);
+}
+
+fn render_resume_confirm_dialog(frame: &mut Frame, app: &TuiApp) {
+    let area = centered_rect(70, 40, frame.area());
+    frame.render_widget(Clear, area);
+
+    let resume = &app.resume_confirm;
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ⚠️  Found existing tasks in workspace", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+
+    // Stats
+    lines.push(Line::from(vec![
+        Span::styled("     Completed: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(resume.completed.to_string(), Style::default().fg(Color::Green)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("     Pending:   ", Style::default().fg(Color::DarkGray)),
+        Span::styled(resume.pending.to_string(), Style::default().fg(Color::Yellow)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("     Failed:    ", Style::default().fg(Color::DarkGray)),
+        Span::styled(resume.failed.to_string(), Style::default().fg(Color::Red)),
+    ]));
+    lines.push(Line::from(""));
+
+    // Options
+    let resume_style = if resume.selected {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let fresh_style = if !resume.selected {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(if resume.selected { "  → [●] " } else { "    [ ] " }, resume_style),
+        Span::styled("Resume from existing tasks", resume_style),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(if !resume.selected { "  → [●] " } else { "    [ ] " }, fresh_style),
+        Span::styled("Start fresh (clear all tasks)", fresh_style),
+    ]));
+    lines.push(Line::from(""));
+
+    // Help
+    lines.push(Line::from(vec![
+        Span::styled("─".repeat(45), Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" ←/→ ", Style::default().fg(Color::Yellow)),
+        Span::styled("switch  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Y/N ", Style::default().fg(Color::Yellow)),
+        Span::styled("quick select  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Enter ", Style::default().fg(Color::Yellow)),
+        Span::styled("confirm", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Resume or Start Fresh? ")
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
 
     frame.render_widget(paragraph, area);
 }

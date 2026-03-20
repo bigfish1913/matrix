@@ -87,6 +87,30 @@ impl Clone for AnswerSender {
     }
 }
 
+/// Wrapper for oneshot sender for boolean confirmations
+#[derive(Debug)]
+pub struct ConfirmSender(Arc<Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>);
+
+impl ConfirmSender {
+    pub fn new(sender: tokio::sync::oneshot::Sender<bool>) -> Self {
+        Self(Arc::new(Mutex::new(Some(sender))))
+    }
+
+    pub fn send(self, confirmed: bool) -> Result<(), bool> {
+        if let Some(sender) = self.0.lock().unwrap().take() {
+            sender.send(confirmed)
+        } else {
+            Err(confirmed)
+        }
+    }
+}
+
+impl Clone for ConfirmSender {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
 /// Events emitted by orchestrator for TUI consumption
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -157,6 +181,14 @@ pub enum Event {
     ClarificationQuestions {
         questions: Vec<ClarificationQuestion>,
         response_tx: AnswerSender,
+    },
+
+    // Resume confirmation
+    ResumeConfirm {
+        completed: usize,
+        pending: usize,
+        failed: usize,
+        response_tx: ConfirmSender,
     },
 }
 
