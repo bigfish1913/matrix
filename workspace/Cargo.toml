@@ -1,0 +1,25 @@
+[package]
+name = "tank-tower-defense"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A tank tower defense game built with Bevy"
+readme = "README.md"
+keywords = ["game", "tower-defense", "bevy", "rust"]
+categories = ["games"]
+
+[dependencies]
+# Bevy game engine - using features we need for a 2D game
+bevy = { version = "0.15", features = [
+    "dynamic_linking",  # Faster compile times during development
+] }
+
+# Random number generation for game logic
+rand = "0.8"
+
+# Serialization for save/load functionality
+serde.workspace = true
+
+# Path finding for enemy movement
+pathfinding = "4.10"

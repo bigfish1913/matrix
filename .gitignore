@@ -15,4 +15,4 @@ Thumbs.db
 .tasks/
 logs/
 *.logworkspace/
-workspace/
+.matrix/

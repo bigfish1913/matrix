@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+target/
+__pycache__/
+*.pyc
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build
+dist/
+build/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust specific
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Bevy specific
+assets/.import/
+
+# Game saves
+saves/
