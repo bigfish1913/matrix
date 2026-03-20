@@ -116,12 +116,19 @@ pub fn render_markdown(markdown: &str, width: usize) -> Vec<Line<'static>> {
                             for (i, chunk) in chunks.into_iter().enumerate() {
                                 if i > 0 {
                                     lines.push(Line::from(std::mem::take(&mut code_line)));
-                                    code_line.push(Span::styled("    ", Style::default().fg(Color::DarkGray)));
+                                    code_line.push(Span::styled(
+                                        "    ",
+                                        Style::default().fg(Color::DarkGray),
+                                    ));
                                 }
-                                code_line.push(Span::styled(chunk, Style::default().fg(Color::Yellow)));
+                                code_line
+                                    .push(Span::styled(chunk, Style::default().fg(Color::Yellow)));
                             }
                         } else {
-                            code_line.push(Span::styled(line_text.to_string(), Style::default().fg(Color::Yellow)));
+                            code_line.push(Span::styled(
+                                line_text.to_string(),
+                                Style::default().fg(Color::Yellow),
+                            ));
                         }
 
                         if !code_line.is_empty() {

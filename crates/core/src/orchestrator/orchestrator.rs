@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::models::{Complexity, Task, TaskStatus};
 use crate::store::TaskStore;
-use crate::tui::event::AnswerSender;
+use crate::tui::event::{AnswerSender, ClarificationSender};
 use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -113,36 +113,37 @@ impl Orchestrator {
         // Ensure .gitignore exists
         self.ensure_gitignore().await?;
 
-        // Phase 0: Interactive clarification (optional)
-        let clarification = if self.config.ask_mode && !self.config.resume {
-            // Emit Clarifying state before asking questions
-            self.emit_event(Event::ExecutionStateChanged {
-                state: ExecutionState::Clarifying,
-            });
-            self.clarify_goal().await?
+        // Phase 0: Check for existing tasks FIRST
+        let total = self.store.total().await?;
+        let should_resume = if total > 0 {
+            // Found existing tasks - ask user whether to resume or start fresh
+            self.confirm_resume().await?
         } else {
-            String::new()
+            false
         };
 
-        // Phase 1: Generate or resume tasks
-        let total = self.store.total().await?;
-        if total > 0 {
-            // Found existing tasks - ask user whether to resume or start fresh
-            let should_resume = self.confirm_resume().await?;
-            if should_resume {
-                self.resume_tasks().await?;
-            } else {
-                // Clear existing tasks and start fresh
+        if should_resume {
+            // Resume existing tasks - skip clarification
+            self.resume_tasks().await?;
+        } else {
+            // Starting fresh - clear any existing tasks
+            if total > 0 {
                 info!("Clearing existing tasks and starting fresh...");
                 self.store.clear().await?;
-                // Emit Generating state before task generation
-                self.emit_event(Event::ExecutionStateChanged {
-                    state: ExecutionState::Generating,
-                });
-                self.generate_tasks(&clarification).await?;
             }
-        } else {
-            // No existing tasks - generate new ones
+
+            // Ask clarification questions if enabled
+            let clarification = if self.config.ask_mode {
+                // Emit Clarifying state before asking questions
+                self.emit_event(Event::ExecutionStateChanged {
+                    state: ExecutionState::Clarifying,
+                });
+                self.clarify_goal().await?
+            } else {
+                String::new()
+            };
+
+            // Generate new tasks
             self.emit_event(Event::ExecutionStateChanged {
                 state: ExecutionState::Generating,
             });
@@ -260,12 +261,30 @@ Example:
             return Ok(String::new());
         }
 
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: "clarification".to_string(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(tokens = usage.total_tokens, "Token usage (clarification)");
+        }
+
         // Log raw response for debugging
         info!("Clarification response length: {} chars", result.text.len());
-        debug!("Clarification response: {}", result.text);
+        info!("Clarification raw response: {}", result.text);
+
+        // Try to extract JSON array from response (may be in markdown code block)
+        let json_text = if let Some(json) = extract_json_from_markdown(&result.text) {
+            json
+        } else if let Some(json) = extract_json_array_from_text(&result.text) {
+            json
+        } else {
+            result.text.clone()
+        };
 
         // Parse questions with options
-        let raw_questions: Vec<RawQuestion> = match serde_json::from_str(&result.text) {
+        let raw_questions: Vec<RawQuestion> = match serde_json::from_str::<Vec<RawQuestion>>(&json_text) {
             Ok(q) => {
                 info!("Parsed {} clarification questions", q.len());
                 q
@@ -295,10 +314,16 @@ Example:
             // TUI mode: send questions via event channel and wait for answers
             info!("Sending {} clarification questions to TUI...", questions.len());
             let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
-            let _ = sender.send(Event::ClarificationQuestions {
+            match sender.send(Event::ClarificationQuestions {
                 questions: questions.clone(),
                 response_tx: AnswerSender::new(tx),
-            });
+            }) {
+                Ok(_) => info!("ClarificationQuestions event sent successfully"),
+                Err(e) => {
+                    warn!("Failed to send ClarificationQuestions event: {}", e);
+                    return Ok(String::new());
+                }
+            }
 
             // Wait for answers from TUI (with timeout in case TUI is closed)
             info!("Waiting for TUI clarification answers...");
@@ -312,7 +337,7 @@ Example:
                     let formatted: Vec<String> = questions
                         .iter()
                         .zip(answers.iter())
-                        .map(|(q, a)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
+                        .map(|(q, a): (&ClarificationQuestion, &String)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
                         .collect();
                     info!("Clarification completed successfully");
                     return Ok(formatted.join("\n\n"));
@@ -362,7 +387,7 @@ Example:
         let formatted: Vec<String> = questions
             .iter()
             .zip(answers.iter())
-            .map(|(q, a)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
+            .map(|(q, a): (&ClarificationQuestion, &String)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
             .collect();
         Ok(formatted.join("\n\n"))
     }
@@ -440,7 +465,27 @@ Example:
         Ok(())
     }
 
-    async fn generate_tasks(&self, _clarification: &str) -> Result<()> {
+    /// Check if a task is a clarification question
+    fn is_clarification_task(&self, title: &str, description: &str) -> bool {
+        let clarification_keywords = [
+            "需要更多信息", "需要信息", "请提供", "请描述", "请详细说明",
+            "need more information", "please provide", "please describe",
+            "clarification", "question", "询问", "问题",
+        ];
+        
+        let title_lower = title.to_lowercase();
+        let desc_lower = description.to_lowercase();
+        
+        for keyword in &clarification_keywords {
+            if title_lower.contains(keyword) || desc_lower.contains(keyword) {
+                return true;
+            }
+        }
+        
+        false
+    }
+
+    async fn generate_tasks(&self, clarification: &str) -> Result<()> {
         info!(goal = %self.config.goal, "Generating task list");
 
         let lang_instruction = match self.config.language.as_str() {
@@ -449,12 +494,18 @@ Example:
             _ => "请用中文编写任务标题和描述。",
         };
 
+        // Include clarification answers if available
+        let clarification_section = if !clarification.is_empty() {
+            format!("\n\nCLARIFICATION (User's answers to clarifying questions):\n{}\n", clarification)
+        } else {
+            String::new()
+        };
+
         let prompt = format!(
             r#"You are a software project planner. Break down the following goal into development tasks.
 
 PROJECT GOAL: {}
-
-{}
+{}{}
 
 CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, just the JSON object.
 Do NOT include any text before or after the JSON.
@@ -470,7 +521,7 @@ Example response:
 {{"tasks": [{{"id": "task-001", "title": "Setup project", "description": "Initialize project structure", "depends_on": []}}, {{"id": "task-002", "title": "Create models", "description": "Define data models", "depends_on": ["task-001"]}}]}}
 
 Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
-            self.config.goal, lang_instruction
+            self.config.goal, clarification_section, lang_instruction
         );
 
         let result = self
@@ -484,8 +535,18 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             return Err(Error::ClaudeCli(format!("Task generation failed: {}", result.text)));
         }
 
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: "generate_tasks".to_string(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(tokens = usage.total_tokens, "Token usage (generate_tasks)");
+        }
+
         // Log the raw response for debugging
-        debug!(response = %result.text, "Claude response for task generation");
+        info!("Task generation response length: {} chars", result.text.len());
+        info!("Task generation raw response: {}", result.text);
 
         // Try to extract JSON from the response
         let text = result.text.trim();
@@ -505,9 +566,19 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             Ok(tasks_response) => {
                 info!(count = tasks_response.tasks.len(), "Tasks generated");
 
+                let mut clarification_task = None;
+                
                 for t in tasks_response.tasks {
-                    let mut task = Task::new(t.id, t.title.clone(), t.description);
+                    let mut task = Task::new(t.id, t.title.clone(), t.description.clone());
                     task.depends_on = t.depends_on;
+                    
+                    // Check if this is a clarification task
+                    if self.is_clarification_task(&t.title, &t.description) {
+                        task.is_clarification = true;
+                        clarification_task = Some(task.clone());
+                        info!(task_id = %task.id, "Detected clarification task");
+                    }
+                    
                     self.store.save_task(&task).await?;
 
                     // Emit TaskCreated event
@@ -521,6 +592,12 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
                 }
 
                 self.store.save_manifest(&self.config.goal).await?;
+                
+                // If there's a clarification task, wait for user response
+                if let Some(clar_task) = clarification_task {
+                    info!("Waiting for user clarification response...");
+                    self.handle_clarification_task(&clar_task).await?;
+                }
             }
             Err(e) => {
                 error!(error = %e, json = %json_text, "Failed to parse tasks JSON");
@@ -528,6 +605,82 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             }
         }
 
+        Ok(())
+    }
+
+    /// Handle clarification task by waiting for user response
+    async fn handle_clarification_task(&self, task: &Task) -> Result<()> {
+        // Update task status to in_progress
+        let mut task = task.clone();
+        task.status = TaskStatus::InProgress;
+        self.store.save_task(&task).await?;
+        
+        // Emit clarification event
+        self.emit_event(Event::ExecutionStateChanged {
+            state: ExecutionState::Clarifying,
+        });
+        
+        // Check if in TUI mode
+        if let Some(ref sender) = self.config.event_sender {
+            // TUI mode: send clarification request and wait for response
+            let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+            let _ = sender.send(Event::ClarificationTask {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                description: task.description.clone(),
+                response_tx: crate::tui::event::ClarificationSender::new(tx),
+            });
+            
+            // Wait for user response (with timeout)
+            info!("Waiting for user clarification response...");
+            match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {
+                Ok(Ok(response)) => {
+                    info!("Received clarification response");
+                    // Mark task as completed
+                    task.status = TaskStatus::Completed;
+                    task.result = Some(response);
+                    self.store.save_task(&task).await?;
+                }
+                Ok(Err(_)) => {
+                    warn!("Failed to receive clarification response from TUI");
+                    // Mark task as failed
+                    task.status = TaskStatus::Failed;
+                    task.error = Some("Failed to receive response".to_string());
+                    self.store.save_task(&task).await?;
+                }
+                Err(_) => {
+                    warn!("Timeout waiting for clarification response");
+                    // Mark task as failed
+                    task.status = TaskStatus::Failed;
+                    task.error = Some("Timeout waiting for response".to_string());
+                    self.store.save_task(&task).await?;
+                }
+            }
+        } else {
+            // Non-TUI mode: use stdin/stdout
+            println!("\n[?] {}", task.title);
+            println!("    {}\n", task.description);
+            print!("    Your response: ");
+            use std::io::{self, Write};
+            io::stdout().flush().unwrap();
+            
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_ok() {
+                let response = input.trim().to_string();
+                if !response.is_empty() {
+                    task.status = TaskStatus::Completed;
+                    task.result = Some(response);
+                } else {
+                    task.status = TaskStatus::Failed;
+                    task.error = Some("Empty response".to_string());
+                }
+            } else {
+                task.status = TaskStatus::Failed;
+                task.error = Some("Failed to read response".to_string());
+            }
+            self.store.save_task(&task).await?;
+        }
+        
         Ok(())
     }
 
@@ -574,6 +727,15 @@ OR if splitting needed:
             .runner
             .call(&prompt, &self.config.workspace, Some(120), None, None)
             .await?;
+
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: task.id.clone(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(task_id = %task.id, tokens = usage.total_tokens, "Token usage (assess)");
+        }
 
         let data: AssessResponse = match serde_json::from_str(&result.text) {
             Ok(d) => d,
@@ -1117,6 +1279,50 @@ fn extract_json_from_text(text: &str) -> Option<String> {
 
     if depth == 0 && end > start {
         Some(text[start..end].to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract JSON array from text that may contain other content
+fn extract_json_array_from_text(text: &str) -> Option<String> {
+    // Find the first '['
+    let start = text.find('[')?;
+    let mut depth = 0;
+    let mut end = start;
+
+    for (i, c) in text[start..].char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if depth == 0 && end > start {
+        Some(text[start..end].to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract JSON from markdown code block (```json ... ```)
+/// Supports both JSON objects and arrays
+fn extract_json_from_markdown(text: &str) -> Option<String> {
+    // Try to match ```json ... ``` with any JSON content
+    let re = regex::Regex::new(r"```(?:json)?\s*\n?([\s\S]*?)\n?\s*```").ok()?;
+    let caps = re.captures(text)?;
+    let content = caps.get(1)?.as_str().trim();
+    
+    // Verify it's valid JSON by checking if it starts with { or [
+    if content.starts_with('{') || content.starts_with('[') {
+        Some(content.to_string())
     } else {
         None
     }

@@ -25,7 +25,11 @@ impl LogsPanel {
     /// Render logs panel
     /// `scroll_offset`: scroll position from top (0 = start)
     /// `viewport_height`: height of the visible area (for wrap calculation, currently unused)
-    pub fn render(entries: &[LogEntry], scroll_offset: u16, _viewport_height: u16) -> Paragraph<'static> {
+    pub fn render(
+        entries: &[LogEntry],
+        scroll_offset: u16,
+        _viewport_height: u16,
+    ) -> Paragraph<'static> {
         let lines: Vec<Line> = entries
             .iter()
             .map(|entry| {
@@ -51,11 +55,7 @@ impl LogsPanel {
 
         // Use the scroll_offset directly - the caller is responsible for calculating the correct value
         Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .title(" Logs ")
-                    .borders(Borders::ALL),
-            )
+            .block(Block::default().title(" Logs ").borders(Borders::ALL))
             .wrap(Wrap { trim: false })
             .scroll((scroll_offset, 0))
     }

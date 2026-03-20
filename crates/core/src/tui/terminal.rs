@@ -52,22 +52,19 @@ impl Drop for TerminalGuard {
 
 /// Initialize the terminal for TUI mode
 pub fn init_terminal() -> Result<MatrixTerminal> {
-    enable_raw_mode()
-        .map_err(|e| Error::Config(format!("Failed to enable raw mode: {}", e)))?;
+    enable_raw_mode().map_err(|e| Error::Config(format!("Failed to enable raw mode: {}", e)))?;
 
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
         .map_err(|e| Error::Config(format!("Failed to enter alternate screen: {}", e)))?;
 
     let backend = CrosstermBackend::new(stdout);
-    Terminal::new(backend)
-        .map_err(|e| Error::Config(format!("Failed to create terminal: {}", e)))
+    Terminal::new(backend).map_err(|e| Error::Config(format!("Failed to create terminal: {}", e)))
 }
 
 /// Restore the terminal to normal mode
 pub fn restore_terminal(mut terminal: MatrixTerminal) -> Result<()> {
-    disable_raw_mode()
-        .map_err(|e| Error::Config(format!("Failed to disable raw mode: {}", e)))?;
+    disable_raw_mode().map_err(|e| Error::Config(format!("Failed to disable raw mode: {}", e)))?;
 
     execute!(
         terminal.backend_mut(),

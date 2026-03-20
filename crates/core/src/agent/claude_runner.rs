@@ -16,6 +16,37 @@ pub struct ClaudeResult {
     pub text: String,
     pub is_error: bool,
     pub session_id: Option<String>,
+    /// Token usage information
+    pub usage: Option<TokenUsage>,
+}
+
+/// Token usage information from Claude API
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsage {
+    /// Input tokens used
+    pub input_tokens: u32,
+    /// Output tokens generated
+    pub output_tokens: u32,
+    /// Total tokens used
+    pub total_tokens: u32,
+}
+
+impl TokenUsage {
+    /// Create a new TokenUsage
+    pub fn new(input_tokens: u32, output_tokens: u32) -> Self {
+        Self {
+            input_tokens,
+            output_tokens,
+            total_tokens: input_tokens + output_tokens,
+        }
+    }
+
+    /// Add another TokenUsage to this one
+    pub fn add(&mut self, other: &TokenUsage) {
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.total_tokens += other.total_tokens;
+    }
 }
 
 /// Claude CLI runner
@@ -207,10 +238,13 @@ impl ClaudeRunner {
             let mut reader = BufReader::new(stdout).lines();
             let mut final_result: Option<ClaudeResult> = None;
             let mut all_text = String::new();
+            let mut raw_lines: Vec<String> = Vec::new();
 
             while let Some(line) = reader.next_line().await.map_err(|e| {
                 Error::ClaudeCli(format!("Failed to read stdout: {}", e))
             })? {
+                raw_lines.push(line.clone());
+                
                 // Parse and display each line
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
                     // Check for result
@@ -229,6 +263,7 @@ impl ClaudeRunner {
                                 text: String::new(),
                                 is_error: false,
                                 session_id: Some(sid.to_string()),
+                                usage: None,
                             });
                         } else if let Some(ref mut r) = final_result {
                             r.session_id = Some(sid.to_string());
@@ -275,6 +310,20 @@ impl ClaudeRunner {
                 warn!(exit_code = ?status.code(), "Claude exited with non-zero status");
             }
 
+            // If all_text is empty, try to parse from raw lines
+            if all_text.is_empty() {
+                // Try to find JSON array in raw output
+                let combined = raw_lines.join("\n");
+                if let Some(json) = extract_json_array_from_text(&combined) {
+                    all_text = json;
+                } else {
+                    // Try parse_claude_result on combined output
+                    if let Ok(parsed) = parse_claude_result(&combined) {
+                        return Ok(parsed);
+                    }
+                }
+            }
+
             // Build final result
             if let Some(mut r) = final_result {
                 r.text = all_text;
@@ -284,6 +333,7 @@ impl ClaudeRunner {
                     text: all_text,
                     is_error: false,
                     session_id: None,
+                    usage: None,
                 })
             }
         })
@@ -368,6 +418,7 @@ fn parse_claude_result(output: &str) -> Result<ClaudeResult> {
         text: output.to_string(),
         is_error: false,
         session_id: None,
+        usage: None,
     })
 }
 
@@ -376,6 +427,32 @@ fn extract_json_from_code_block(text: &str) -> Option<String> {
     let re = regex::Regex::new(r"```json\s*(\{.*?\})\s*```").ok()?;
     let caps = re.captures(text)?;
     Some(caps[1].to_string())
+}
+
+/// Extract JSON array from text that may contain other content
+fn extract_json_array_from_text(text: &str) -> Option<String> {
+    // Find the first '['
+    let start = text.find('[')?;
+    let mut depth = 0;
+    let mut end = start;
+    for (i, c) in text[start..].char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 && end > start {
+        Some(text[start..end].to_string())
+    } else {
+        None
+    }
 }
 
 /// Find any JSON object in text
@@ -422,10 +499,24 @@ fn parse_result_json(json: &str) -> Result<ClaudeResult> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // Parse token usage if available
+    let usage = obj.get("usage").and_then(|v| v.as_object()).map(|usage_obj| {
+        let input_tokens = usage_obj
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        let output_tokens = usage_obj
+            .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        TokenUsage::new(input_tokens, output_tokens)
+    });
+
     Ok(ClaudeResult {
         text,
         is_error,
         session_id,
+        usage,
     })
 }
 

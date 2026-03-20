@@ -141,7 +141,11 @@ impl TasksPanel {
     }
 
     /// Render tasks panel with optional tree view
-    pub fn render_with_mode(tasks: &[TaskDisplay], selected: usize, tree_view: bool) -> (List<'static>, ListState) {
+    pub fn render_with_mode(
+        tasks: &[TaskDisplay],
+        selected: usize,
+        tree_view: bool,
+    ) -> (List<'static>, ListState) {
         let items: Vec<ListItem<'static>> = if tree_view {
             Self::render_tree_view(tasks, selected)
         } else {
@@ -151,7 +155,11 @@ impl TasksPanel {
         let mut state = ListState::default();
         state.select(Some(selected));
 
-        let title = if tree_view { " Tasks (Tree) " } else { " Tasks (List) " };
+        let title = if tree_view {
+            " Tasks (Tree) "
+        } else {
+            " Tasks (List) "
+        };
 
         let list = List::new(items)
             .block(
@@ -160,7 +168,11 @@ impl TasksPanel {
                     .borders(Borders::ALL)
                     .style(Style::default()),
             )
-            .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
             .highlight_symbol("> ");
 
         (list, state)
@@ -192,7 +204,9 @@ impl TasksPanel {
                 // Determine if this item is selected
                 let is_selected = idx == selected;
                 let title_style = if is_selected {
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
@@ -232,7 +246,8 @@ impl TasksPanel {
 
     /// Render as flat list view
     fn render_list_view(tasks: &[TaskDisplay], selected: usize) -> Vec<ListItem<'static>> {
-        tasks.iter()
+        tasks
+            .iter()
             .enumerate()
             .map(|(idx, task)| {
                 let icon = Self::status_icon(task.status);
@@ -250,7 +265,9 @@ impl TasksPanel {
 
                 let is_selected = idx == selected;
                 let title_style = if is_selected {
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };

@@ -27,7 +27,13 @@ fn test_event_channel() {
 
     let event = receiver.try_recv().unwrap();
     match event {
-        Event::TaskCreated { id, title, parent_id, depth, depends_on } => {
+        Event::TaskCreated {
+            id,
+            title,
+            parent_id,
+            depth,
+            depends_on,
+        } => {
             assert_eq!(id, "task-001");
             assert_eq!(title, "Test");
             assert_eq!(parent_id, None);
@@ -75,7 +81,7 @@ fn test_log_buffer_dedup() {
     buffer.push(LogLevel::Info, "".to_string());
     buffer.push(LogLevel::Info, "   ".to_string());
     let entries = buffer.get_entries();
-    assert_eq!(entries.len(), 2);  // No new entries added
+    assert_eq!(entries.len(), 2); // No new entries added
 }
 
 #[test]

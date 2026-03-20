@@ -94,6 +94,9 @@ pub struct Task {
     /// Files modified during execution
     #[serde(default)]
     pub modified_files: Vec<String>,
+    /// Whether this is a clarification question task
+    #[serde(default)]
+    pub is_clarification: bool,
 }
 
 impl Task {
@@ -119,6 +122,7 @@ impl Task {
             verification_result: HashMap::new(),
             test_passed: false,
             modified_files: Vec::new(),
+            is_clarification: false,
         }
     }
 

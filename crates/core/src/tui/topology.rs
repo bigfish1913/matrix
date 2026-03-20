@@ -52,9 +52,7 @@ pub fn generate_mermaid_diagram(tasks: &[TaskTopologyInfo]) -> String {
     };
 
     // Sanitize ID for mermaid (remove special chars)
-    let sanitize_id = |id: &str| -> String {
-        id.replace('-', "_").replace('.', "_")
-    };
+    let sanitize_id = |id: &str| -> String { id.replace('-', "_").replace('.', "_") };
 
     // Sanitize text for mermaid (escape quotes and special chars)
     let sanitize_text = |text: &str| -> String {
@@ -160,10 +158,8 @@ pub fn generate_ascii_tree(tasks: &[TaskTopologyInfo]) -> String {
 
     // Build tree structure
     let mut result = Vec::new();
-    let root_tasks: Vec<&TaskTopologyInfo> = tasks
-        .iter()
-        .filter(|t| t.parent_id.is_none())
-        .collect();
+    let root_tasks: Vec<&TaskTopologyInfo> =
+        tasks.iter().filter(|t| t.parent_id.is_none()).collect();
 
     for (idx, task) in root_tasks.iter().enumerate() {
         let is_last = idx == root_tasks.len() - 1;
@@ -231,10 +227,22 @@ pub fn generate_topology_file(tasks: &[TaskTopologyInfo]) -> String {
     content.push_str("\n\n");
 
     // Statistics
-    let completed = tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
-    let failed = tasks.iter().filter(|t| t.status == TaskStatus::Failed).count();
-    let pending = tasks.iter().filter(|t| t.status == TaskStatus::Pending).count();
-    let running = tasks.iter().filter(|t| t.status == TaskStatus::InProgress).count();
+    let completed = tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::Completed)
+        .count();
+    let failed = tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::Failed)
+        .count();
+    let pending = tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::Pending)
+        .count();
+    let running = tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::InProgress)
+        .count();
 
     content.push_str("## Statistics\n\n");
     content.push_str(&format!("- Completed: {}\n", completed));

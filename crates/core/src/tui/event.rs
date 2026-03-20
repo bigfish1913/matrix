@@ -111,6 +111,30 @@ impl Clone for ConfirmSender {
     }
 }
 
+/// Wrapper for oneshot sender for clarification responses
+#[derive(Debug)]
+pub struct ClarificationSender(Arc<Mutex<Option<tokio::sync::oneshot::Sender<String>>>>);
+
+impl ClarificationSender {
+    pub fn new(sender: tokio::sync::oneshot::Sender<String>) -> Self {
+        Self(Arc::new(Mutex::new(Some(sender))))
+    }
+
+    pub fn send(self, response: String) -> Result<(), String> {
+        if let Some(sender) = self.0.lock().unwrap().take() {
+            sender.send(response)
+        } else {
+            Err(response)
+        }
+    }
+}
+
+impl Clone for ClarificationSender {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
 /// Events emitted by orchestrator for TUI consumption
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -189,6 +213,20 @@ pub enum Event {
         pending: usize,
         failed: usize,
         response_tx: ConfirmSender,
+    },
+
+    // Clarification task (when Claude generates a question task)
+    ClarificationTask {
+        task_id: String,
+        title: String,
+        description: String,
+        response_tx: ClarificationSender,
+    },
+
+    // Token usage update
+    TokenUsageUpdate {
+        task_id: String,
+        tokens_used: u32,
     },
 }
 

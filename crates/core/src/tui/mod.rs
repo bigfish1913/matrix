@@ -36,7 +36,7 @@ pub struct LogEntry {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub level: LogLevel,
     pub message: String,
-    pub repeat_count: usize,  // Number of times this message pattern was repeated
+    pub repeat_count: usize, // Number of times this message pattern was repeated
 }
 
 impl LogBuffer {
@@ -115,7 +115,10 @@ impl Default for LogBuffer {
 }
 
 pub use app::TuiApp;
-pub use event::{ClarificationQuestion, ConfirmSender, Event, ExecutionState, Key, LogLevel, TuiEvent, VerbosityLevel};
+pub use event::{
+    ClarificationQuestion, ClarificationSender, ConfirmSender, Event, ExecutionState, Key,
+    LogLevel, TuiEvent, VerbosityLevel,
+};
 pub use render::{render_app, MatrixTerminal};
 pub use terminal::{event_stream, init_terminal, restore_terminal, TerminalGuard};
 pub use tracing_layer::TuiLogLayer;

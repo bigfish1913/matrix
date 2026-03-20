@@ -217,6 +217,15 @@ impl TaskExecutor {
                     self.agent_pool.record(task, sid, thread_name).await;
                 }
 
+                // Emit token usage update if available
+                if let Some(usage) = &claude_result.usage {
+                    self.emit_event(Event::TokenUsageUpdate {
+                        task_id: task.id.clone(),
+                        tokens_used: usage.total_tokens,
+                    });
+                    info!(task_id = %task.id, tokens = usage.total_tokens, "Token usage");
+                }
+
                 let stats = self.agent_pool.stats().await;
                 info!(task_id = %task.id, stats = %stats, "Task executed");
 
@@ -307,6 +316,15 @@ Respond with a brief summary of what you fixed."#,
         if result.is_error {
             warn!(error = %result.text, "Fix attempt failed");
             return Ok(false);
+        }
+
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: task.id.clone(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(task_id = %task.id, tokens = usage.total_tokens, "Token usage (fix)");
         }
 
         info!(task_id = %task.id, summary = %result.text, "Fix applied");

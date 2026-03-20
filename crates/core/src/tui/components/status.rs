@@ -29,6 +29,8 @@ impl StatusBar {
         model: &str,
         verbosity: VerbosityLevel,
         version: &str,
+        current_task_tokens: u32,
+        total_tokens: u32,
     ) -> Paragraph<'static> {
         let state_color = match state {
             ExecutionState::Idle => Color::Gray,
@@ -85,7 +87,12 @@ impl StatusBar {
 
         let line = Line::from(vec![
             Span::styled(format!("v{} ", version), Style::default().fg(Color::Cyan)),
-            Span::styled(state.to_string(), Style::default().fg(state_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                state.to_string(),
+                Style::default()
+                    .fg(state_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(task_str, Style::default().fg(Color::White)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled("Task:", Style::default().fg(Color::DarkGray)),
@@ -96,6 +103,17 @@ impl StatusBar {
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(progress, Style::default().fg(Color::White)),
             Span::styled(failed_str, Style::default().fg(Color::Red)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tokens:", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}task", current_task_tokens),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled("/", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}total", total_tokens),
+                Style::default().fg(Color::Green),
+            ),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(model.to_string(), Style::default().fg(Color::Magenta)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),

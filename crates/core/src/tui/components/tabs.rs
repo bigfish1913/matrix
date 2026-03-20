@@ -34,6 +34,10 @@ impl TabSwitcher {
                 Tab::Output => 2,
             })
             .style(Style::default().fg(Color::White))
-            .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED))
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::UNDERLINED),
+            )
     }
 }

@@ -21,6 +21,6 @@ pub use models::{Complexity, Manifest, Task, TaskStatus};
 pub use orchestrator::{Orchestrator, OrchestratorConfig};
 pub use store::TaskStore;
 pub use tui::{
-    render_app, Event, EventSender, LogBuffer, MatrixTerminal, TuiApp, TuiEvent, TuiLogLayer,
+    render_app, ClarificationSender, Event, EventSender, LogBuffer, MatrixTerminal, TuiApp, TuiEvent, TuiLogLayer,
     VerbosityLevel,
 };

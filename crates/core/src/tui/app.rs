@@ -1,7 +1,10 @@
 //! TUI Application state and main loop.
 
 use crate::models::TaskStatus;
-use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventReceiver, ExecutionState, Key, LogBuffer, VerbosityLevel};
+use crate::tui::{
+    ClarificationQuestion, ClarificationSender, ConfirmSender, Event, EventReceiver,
+    ExecutionState, Key, LogBuffer, VerbosityLevel,
+};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -11,7 +14,7 @@ pub struct ResumeConfirmState {
     pub completed: usize,
     pub pending: usize,
     pub failed: usize,
-    pub selected: bool,  // true = Resume, false = Start Fresh
+    pub selected: bool, // true = Resume, false = Start Fresh
     pub response_tx: Option<ConfirmSender>,
 }
 
@@ -28,7 +31,7 @@ impl ResumeConfirmState {
 /// State for quit confirmation dialog
 #[derive(Debug, Default)]
 pub struct QuitConfirmState {
-    pub pending: bool,  // Whether there are pending tasks
+    pub pending: bool,   // Whether there are pending tasks
     pub confirmed: bool, // User confirmed quit
 }
 
@@ -79,15 +82,40 @@ impl SearchState {
     }
 }
 
+/// State for clarification task (when Claude generates a question task)
+#[derive(Debug, Default)]
+pub struct ClarificationTaskState {
+    pub task_id: Option<String>,
+    pub title: String,
+    pub description: String,
+    pub response: String,
+    pub response_tx: Option<crate::tui::event::ClarificationSender>,
+}
+
+impl ClarificationTaskState {
+    pub fn is_active(&self) -> bool {
+        self.response_tx.is_some()
+    }
+
+    pub fn finish(&mut self) {
+        self.response_tx = None;
+        self.task_id = None;
+        self.title.clear();
+        self.description.clear();
+        self.response.clear();
+    }
+}
+
 /// State for clarification questions dialog (multiple choice)
 #[derive(Debug, Default)]
 pub struct ClarificationState {
     pub questions: Vec<ClarificationQuestion>,
     pub answers: Vec<String>,
     pub current_index: usize,
-    pub selected_option: usize,  // Currently highlighted option
-    pub custom_input: String,    // For "Other" option
-    pub is_custom_input: bool,   // Whether user is typing custom input
+    pub selected_option: usize, // Currently highlighted option
+    pub custom_input: String,   // For "Other" option
+    pub is_custom_input: bool,  // Whether user is typing custom input
+    pub scroll: u16,            // Scroll offset for long content
     pub response_tx: Option<crate::tui::event::AnswerSender>,
 }
 
@@ -166,10 +194,25 @@ pub struct TaskDisplay {
 /// Claude output line
 #[derive(Debug, Clone)]
 pub enum OutputLine {
-    Thinking { task_id: String, content: String },
-    ToolUse { task_id: String, tool_name: String, tool_input: Option<String> },
-    ToolResult { task_id: String, tool_name: String, result: String, success: bool },
-    Result { task_id: String, content: String },
+    Thinking {
+        task_id: String,
+        content: String,
+    },
+    ToolUse {
+        task_id: String,
+        tool_name: String,
+        tool_input: Option<String>,
+    },
+    ToolResult {
+        task_id: String,
+        tool_name: String,
+        result: String,
+        success: bool,
+    },
+    Result {
+        task_id: String,
+        content: String,
+    },
 }
 
 /// Main TUI application state
@@ -181,22 +224,26 @@ pub struct TuiApp {
     pub state: ExecutionState,
     pub current_task_id: Option<String>,
     pub current_model: String,
-    pub is_paused: bool,  // Pause execution
+    pub is_paused: bool, // Pause execution
 
     // Progress
     pub completed_count: usize,
     pub total_count: usize,
     pub failed_count: usize,
-    pub start_time: Option<Instant>,        // Total elapsed time
-    pub task_start_time: Option<Instant>,   // Current task elapsed time
+    pub start_time: Option<Instant>,      // Total elapsed time
+    pub task_start_time: Option<Instant>, // Current task elapsed time
+
+    // Token usage tracking
+    pub current_task_tokens: u32, // Tokens used in current task
+    pub total_tokens: u32,        // Total tokens used across all tasks
 
     // Animation
-    pub spinner_frame: usize,              // Current spinner frame
+    pub spinner_frame: usize, // Current spinner frame
 
     // Tasks
     pub tasks: Vec<TaskDisplay>,
     pub tasks_scroll: usize,
-    pub tree_view: bool,  // Toggle between list and tree view
+    pub tree_view: bool, // Toggle between list and tree view
 
     // Task search
     pub search: SearchState,
@@ -206,15 +253,15 @@ pub struct TuiApp {
 
     // Claude output (per-task storage)
     pub output_by_task: HashMap<String, Vec<OutputLine>>,
-    pub output_lines: Vec<OutputLine>,  // All output (current view)
+    pub output_lines: Vec<OutputLine>, // All output (current view)
     pub output_scroll: u16,
-    pub output_task_id: Option<String>,  // Currently viewed task output
-    pub output_auto_follow: bool,  // Auto-scroll to bottom on new output
+    pub output_task_id: Option<String>, // Currently viewed task output
+    pub output_auto_follow: bool,       // Auto-scroll to bottom on new output
 
     // Logs
     pub log_buffer: LogBuffer,
     pub logs_scroll: u16,
-    pub logs_auto_follow: bool,  // Auto-scroll to bottom on new logs
+    pub logs_auto_follow: bool, // Auto-scroll to bottom on new logs
 
     // Verbosity
     pub verbosity: VerbosityLevel,
@@ -230,6 +277,9 @@ pub struct TuiApp {
 
     // Resume confirmation
     pub resume_confirm: ResumeConfirmState,
+
+    // Clarification task (when Claude generates a question task)
+    pub clarification_task: ClarificationTaskState,
 
     // Quit confirmation
     pub quit_confirm: QuitConfirmState,
@@ -251,6 +301,8 @@ impl TuiApp {
             failed_count: 0,
             start_time: None,
             task_start_time: None,
+            current_task_tokens: 0,
+            total_tokens: 0,
             spinner_frame: 0,
             tasks: Vec::new(),
             tasks_scroll: 0,
@@ -270,6 +322,7 @@ impl TuiApp {
             show_help: false,
             clarification: ClarificationState::default(),
             resume_confirm: ResumeConfirmState::default(),
+            clarification_task: ClarificationTaskState::default(),
             quit_confirm: QuitConfirmState::default(),
             running: true,
         }
@@ -294,8 +347,7 @@ impl TuiApp {
             self.tasks
                 .iter()
                 .filter(|t| {
-                    t.id.to_lowercase().contains(&query) ||
-                    t.title.to_lowercase().contains(&query)
+                    t.id.to_lowercase().contains(&query) || t.title.to_lowercase().contains(&query)
                 })
                 .collect()
         }
@@ -304,7 +356,9 @@ impl TuiApp {
     /// Get selected task (based on scroll position)
     pub fn selected_task(&self) -> Option<&TaskDisplay> {
         let filtered = self.filtered_tasks();
-        filtered.get(self.tasks_scroll.min(filtered.len().saturating_sub(1))).copied()
+        filtered
+            .get(self.tasks_scroll.min(filtered.len().saturating_sub(1)))
+            .copied()
     }
 
     /// Switch output view to specific task
@@ -481,7 +535,10 @@ impl TuiApp {
 
     /// Try to quit (with confirmation if tasks running)
     fn try_quit(&mut self) {
-        let has_pending = self.tasks.iter().any(|t| t.status == TaskStatus::Pending || t.status == TaskStatus::InProgress);
+        let has_pending = self
+            .tasks
+            .iter()
+            .any(|t| t.status == TaskStatus::Pending || t.status == TaskStatus::InProgress);
         if has_pending && !self.quit_confirm.confirmed {
             self.quit_confirm.pending = true;
         } else {
@@ -539,6 +596,7 @@ impl TuiApp {
                     self.clarification.custom_input.clear();
                     self.clarification.is_custom_input = false;
                     self.clarification.selected_option = 0;
+                    self.clarification.scroll = 0; // Reset scroll for new question
 
                     // Check if all questions answered
                     if self.clarification.current_index >= self.clarification.questions.len() {
@@ -577,6 +635,14 @@ impl TuiApp {
                         self.clarification.selected_option += 1;
                     }
                 }
+                Key::PageUp => {
+                    // Scroll up
+                    self.clarification.scroll = self.clarification.scroll.saturating_sub(5);
+                }
+                Key::PageDown => {
+                    // Scroll down
+                    self.clarification.scroll = self.clarification.scroll.saturating_add(5);
+                }
                 Key::Char(c) if c.is_ascii_digit() => {
                     // Direct selection by number (1-9)
                     let num = c.to_digit(10).unwrap() as usize;
@@ -592,10 +658,9 @@ impl TuiApp {
                 Key::Esc => {
                     // Cancel all questions - send empty answers
                     if let Some(tx) = self.clarification.response_tx.take() {
-                        let empty_answers: Vec<String> =
-                            std::iter::repeat(String::new())
-                                .take(self.clarification.questions.len())
-                                .collect();
+                        let empty_answers: Vec<String> = std::iter::repeat(String::new())
+                            .take(self.clarification.questions.len())
+                            .collect();
                         let _ = tx.send(empty_answers);
                     }
                     self.clarification.finish();
@@ -612,7 +677,11 @@ impl TuiApp {
             self.clarification.is_custom_input = true;
         } else {
             // Regular option selected
-            let answer = if let Some(q) = self.clarification.questions.get(self.clarification.current_index) {
+            let answer = if let Some(q) = self
+                .clarification
+                .questions
+                .get(self.clarification.current_index)
+            {
                 if self.clarification.selected_option < q.options.len() {
                     q.options[self.clarification.selected_option].clone()
                 } else {
@@ -625,6 +694,7 @@ impl TuiApp {
             self.clarification.answers.push(answer);
             self.clarification.current_index += 1;
             self.clarification.selected_option = 0;
+            self.clarification.scroll = 0; // Reset scroll for new question
 
             // Check if all questions answered
             if self.clarification.current_index >= self.clarification.questions.len() {
@@ -643,21 +713,30 @@ impl TuiApp {
     fn log_clarification_summary(&mut self) {
         use crate::tui::LogLevel;
 
-        self.log_buffer.push(LogLevel::Info, "━━━ Clarification Summary ━━━".to_string());
+        self.log_buffer
+            .push(LogLevel::Info, "━━━ Clarification Summary ━━━".to_string());
 
         for (i, question) in self.clarification.questions.iter().enumerate() {
-            let answer = self.clarification.answers.get(i).map(|s| s.as_str()).unwrap_or("(skipped)");
+            let answer = self
+                .clarification
+                .answers
+                .get(i)
+                .map(|s| s.as_str())
+                .unwrap_or("(skipped)");
             let truncated_q: String = question.question.chars().take(50).collect();
             let q_display = if truncated_q.len() < question.question.len() {
                 format!("{}...", truncated_q)
             } else {
                 question.question.clone()
             };
-            self.log_buffer.push(LogLevel::Info, format!("Q{}: {}", i + 1, q_display));
-            self.log_buffer.push(LogLevel::Info, format!("  → {}", answer));
+            self.log_buffer
+                .push(LogLevel::Info, format!("Q{}: {}", i + 1, q_display));
+            self.log_buffer
+                .push(LogLevel::Info, format!("  → {}", answer));
         }
 
-        self.log_buffer.push(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string());
+        self.log_buffer
+            .push(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string());
 
         // Auto-scroll logs to show summary
         if self.logs_auto_follow {
@@ -729,7 +808,13 @@ impl TuiApp {
     /// Process an orchestrator event
     pub fn process_event(&mut self, event: Event) {
         match event {
-            Event::TaskCreated { id, title, parent_id, depth, depends_on } => {
+            Event::TaskCreated {
+                id,
+                title,
+                parent_id,
+                depth,
+                depends_on,
+            } => {
                 self.tasks.push(TaskDisplay {
                     id: id.clone(),
                     title,
@@ -757,8 +842,16 @@ impl TuiApp {
                     task.status = status;
                 }
 
-                self.completed_count = self.tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
-                self.failed_count = self.tasks.iter().filter(|t| t.status == TaskStatus::Failed).count();
+                self.completed_count = self
+                    .tasks
+                    .iter()
+                    .filter(|t| t.status == TaskStatus::Completed)
+                    .count();
+                self.failed_count = self
+                    .tasks
+                    .iter()
+                    .filter(|t| t.status == TaskStatus::Failed)
+                    .count();
 
                 if status == TaskStatus::InProgress {
                     self.current_task_id = Some(id.clone());
@@ -775,38 +868,82 @@ impl TuiApp {
                 }
             }
             Event::ClaudeThinking { task_id, content } => {
-                let line = OutputLine::Thinking { task_id: task_id.clone(), content };
-                self.output_by_task.entry(task_id.clone()).or_default().push(line.clone());
+                let line = OutputLine::Thinking {
+                    task_id: task_id.clone(),
+                    content,
+                };
+                self.output_by_task
+                    .entry(task_id.clone())
+                    .or_default()
+                    .push(line.clone());
                 if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
                     self.output_lines.push(line);
                 }
             }
-            Event::ClaudeToolUse { task_id, tool_name, tool_input } => {
+            Event::ClaudeToolUse {
+                task_id,
+                tool_name,
+                tool_input,
+            } => {
                 if self.verbosity >= VerbosityLevel::Normal {
-                    let line = OutputLine::ToolUse { task_id: task_id.clone(), tool_name, tool_input };
-                    self.output_by_task.entry(task_id.clone()).or_default().push(line.clone());
-                    if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
+                    let line = OutputLine::ToolUse {
+                        task_id: task_id.clone(),
+                        tool_name,
+                        tool_input,
+                    };
+                    self.output_by_task
+                        .entry(task_id.clone())
+                        .or_default()
+                        .push(line.clone());
+                    if self.output_task_id.is_none()
+                        || self.output_task_id.as_ref() == Some(&task_id)
+                    {
                         self.output_lines.push(line);
                     }
                 }
             }
-            Event::ClaudeToolResult { task_id, tool_name, result, success } => {
+            Event::ClaudeToolResult {
+                task_id,
+                tool_name,
+                result,
+                success,
+            } => {
                 if self.verbosity >= VerbosityLevel::Normal {
-                    let line = OutputLine::ToolResult { task_id: task_id.clone(), tool_name, result, success };
-                    self.output_by_task.entry(task_id.clone()).or_default().push(line.clone());
-                    if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
+                    let line = OutputLine::ToolResult {
+                        task_id: task_id.clone(),
+                        tool_name,
+                        result,
+                        success,
+                    };
+                    self.output_by_task
+                        .entry(task_id.clone())
+                        .or_default()
+                        .push(line.clone());
+                    if self.output_task_id.is_none()
+                        || self.output_task_id.as_ref() == Some(&task_id)
+                    {
                         self.output_lines.push(line);
                     }
                 }
             }
             Event::ClaudeResult { task_id, result } => {
-                let line = OutputLine::Result { task_id: task_id.clone(), content: result };
-                self.output_by_task.entry(task_id.clone()).or_default().push(line.clone());
+                let line = OutputLine::Result {
+                    task_id: task_id.clone(),
+                    content: result,
+                };
+                self.output_by_task
+                    .entry(task_id.clone())
+                    .or_default()
+                    .push(line.clone());
                 if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
                     self.output_lines.push(line);
                 }
             }
-            Event::Log { timestamp, level, message } => {
+            Event::Log {
+                timestamp,
+                level,
+                message,
+            } => {
                 self.log_buffer.push(level, message);
                 let _ = timestamp;
                 if self.logs_auto_follow {
@@ -819,7 +956,12 @@ impl TuiApp {
                     self.start_time = Some(Instant::now());
                 }
             }
-            Event::ProgressUpdate { completed, total, failed, elapsed } => {
+            Event::ProgressUpdate {
+                completed,
+                total,
+                failed,
+                elapsed,
+            } => {
                 self.completed_count = completed;
                 self.total_count = total;
                 self.failed_count = failed;
@@ -828,7 +970,10 @@ impl TuiApp {
             Event::ModelChanged { model } => {
                 self.current_model = model;
             }
-            Event::ClarificationQuestions { questions, response_tx } => {
+            Event::ClarificationQuestions {
+                questions,
+                response_tx,
+            } => {
                 self.clarification.questions = questions;
                 self.clarification.answers = Vec::new();
                 self.clarification.current_index = 0;
@@ -837,12 +982,43 @@ impl TuiApp {
                 self.clarification.is_custom_input = false;
                 self.clarification.response_tx = Some(response_tx);
             }
-            Event::ResumeConfirm { completed, pending, failed, response_tx } => {
+            Event::ResumeConfirm {
+                completed,
+                pending,
+                failed,
+                response_tx,
+            } => {
                 self.resume_confirm.completed = completed;
                 self.resume_confirm.pending = pending;
                 self.resume_confirm.failed = failed;
                 self.resume_confirm.selected = true;
                 self.resume_confirm.response_tx = Some(response_tx);
+            }
+            Event::ClarificationTask {
+                task_id,
+                title,
+                description,
+                response_tx,
+            } => {
+                self.clarification_task.task_id = Some(task_id);
+                self.clarification_task.title = title;
+                self.clarification_task.description = description;
+                self.clarification_task.response_tx = Some(response_tx);
+            }
+            Event::TokenUsageUpdate {
+                task_id,
+                tokens_used,
+            } => {
+                // Check if this is a new task
+                if self.current_task_id.as_ref() != Some(&task_id) {
+                    // Reset current task tokens for new task
+                    self.current_task_tokens = 0;
+                    self.current_task_id = Some(task_id);
+                }
+                // Update current task tokens
+                self.current_task_tokens += tokens_used;
+                // Update total tokens
+                self.total_tokens += tokens_used;
             }
         }
     }
