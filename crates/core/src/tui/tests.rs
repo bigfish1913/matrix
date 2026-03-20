@@ -48,6 +48,47 @@ fn test_log_buffer() {
 }
 
 #[test]
+fn test_log_buffer_dedup() {
+    let buffer = LogBuffer::new(10);
+
+    // Push same message multiple times - should dedupe
+    buffer.push(LogLevel::Info, "test message".to_string());
+    buffer.push(LogLevel::Info, "test message".to_string());
+    buffer.push(LogLevel::Info, "test message".to_string());
+
+    let entries = buffer.get_entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].repeat_count, 3);
+
+    // Different level should not be deduped
+    buffer.push(LogLevel::Warn, "test message".to_string());
+    let entries = buffer.get_entries();
+    assert_eq!(entries.len(), 2);
+
+    // Empty message should be skipped
+    buffer.push(LogLevel::Info, "".to_string());
+    buffer.push(LogLevel::Info, "   ".to_string());
+    let entries = buffer.get_entries();
+    assert_eq!(entries.len(), 2);  // No new entries added
+}
+
+#[test]
+fn test_log_buffer_pattern_dedup() {
+    let buffer = LogBuffer::new(10);
+
+    // Messages with different numbers but same pattern should be deduped
+    buffer.push(LogLevel::Info, "Progress: 1 completed".to_string());
+    buffer.push(LogLevel::Info, "Progress: 2 completed".to_string());
+    buffer.push(LogLevel::Info, "Progress: 10 completed".to_string());
+
+    let entries = buffer.get_entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].repeat_count, 3);
+    // Should keep the first message
+    assert_eq!(entries[0].message, "Progress: 1 completed");
+}
+
+#[test]
 fn test_logs_panel_auto_scroll() {
     // Test when entries fit within viewport (no scroll needed)
     assert_eq!(LogsPanel::calculate_auto_scroll(5, 10), 0);

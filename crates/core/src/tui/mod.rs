@@ -66,16 +66,22 @@ impl LogBuffer {
         result
     }
 
-    /// Push a new log entry (deduplicates similar messages with different numbers)
+    /// Push a new log entry (deduplicates exact matches and pattern matches)
     pub fn push(&self, level: LogLevel, message: String) {
         let mut entries = self.entries.lock().unwrap();
+
+        // Skip empty messages
+        if message.trim().is_empty() {
+            return;
+        }
+
         let pattern = Self::extract_pattern(&message);
 
         // Check if this matches the pattern of the last message
         if let Some(last) = entries.last_mut() {
             let last_pattern = Self::extract_pattern(&last.message);
             if last.level == level && last_pattern == pattern {
-                // Same pattern, increment repeat count and update message to show range
+                // Same pattern, increment repeat count
                 last.repeat_count += 1;
                 return;
             }

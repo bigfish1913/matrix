@@ -24,17 +24,27 @@ where
     fn on_event(&self, event: &TracingEvent, _ctx: Context<'_, S>) {
         // Skip logs from certain noisy modules
         let module = event.metadata().module_path().unwrap_or("");
-        if module.contains("tokio") || module.contains("hyper") || module.contains("mio") {
+        if module.contains("tokio")
+            || module.contains("hyper")
+            || module.contains("mio")
+            || module.contains("reqwest")
+            || module.contains("h2")
+        {
+            return;
+        }
+
+        // Skip DEBUG and TRACE logs to reduce noise
+        let level = *event.metadata().level();
+        if level == tracing::Level::TRACE || level == tracing::Level::DEBUG {
             return;
         }
 
         // Get the log level
-        let level = match *event.metadata().level() {
-            tracing::Level::TRACE => LogLevel::Trace,
-            tracing::Level::DEBUG => LogLevel::Debug,
+        let log_level = match level {
             tracing::Level::INFO => LogLevel::Info,
             tracing::Level::WARN => LogLevel::Warn,
             tracing::Level::ERROR => LogLevel::Error,
+            _ => return, // Already filtered above
         };
 
         // Format the message
@@ -46,7 +56,7 @@ where
         let timestamp = chrono::Utc::now();
         let _ = self.sender.send(Event::Log {
             timestamp,
-            level,
+            level: log_level,
             message,
         });
     }

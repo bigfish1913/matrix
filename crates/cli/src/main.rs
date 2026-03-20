@@ -51,6 +51,10 @@ struct Args {
     #[arg(short, long, default_value = "true")]
     ask: bool,
 
+    /// Language for AI prompts (default: zh, options: zh, en)
+    #[arg(short = 'L', long, default_value = "zh")]
+    lang: String,
+
     /// Disable TUI mode, use simple output
     #[arg(long)]
     no_tui: bool,
@@ -169,6 +173,7 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
         ask_mode: args.ask,
         resume: args.resume,
         event_sender: Some(event_sender),
+        language: args.lang.clone(),
     };
 
     // Spawn orchestrator as background task
@@ -237,13 +242,12 @@ async fn run_tui_loop(
                         });
                     }
                     TuiEvent::Tick => {
-                        // Poll for new orchestrator events and redraw immediately if any
-                        let had_new_events = app.poll_events_count() > 0;
-                        if had_new_events {
-                            let _ = terminal.draw(|frame| {
-                                render_app(frame, app);
-                            });
-                        }
+                        // Poll for new orchestrator events
+                        app.poll_events();
+                        // Always redraw on tick to update elapsed time
+                        let _ = terminal.draw(|frame| {
+                            render_app(frame, app);
+                        });
                     }
                     _ => {}
                 }
@@ -326,6 +330,7 @@ async fn run_simple(args: &Args) -> anyhow::Result<()> {
         ask_mode: args.ask,
         resume: args.resume,
         event_sender: None,
+        language: args.lang.clone(),
     };
 
     // Run orchestrator

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(~/.local/bin/matrix.exe --help)"
+      "Bash(~/.local/bin/matrix.exe --help)",
+      "Bash(cargo run:*)"
     ]
   }
 }

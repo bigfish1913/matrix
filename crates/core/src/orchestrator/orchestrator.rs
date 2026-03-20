@@ -29,6 +29,8 @@ pub struct OrchestratorConfig {
     pub ask_mode: bool,
     pub resume: bool,
     pub event_sender: Option<EventSender>,
+    /// Language for AI prompts (default: "zh" for Chinese)
+    pub language: String,
 }
 
 impl OrchestratorConfig {
@@ -44,6 +46,7 @@ impl OrchestratorConfig {
             ask_mode: true, // 默认开启 ask 模式
             resume: false,
             event_sender: None,
+            language: "zh".to_string(), // 默认使用中文
         }
     }
 }
@@ -170,10 +173,18 @@ impl Orchestrator {
     async fn clarify_goal(&self) -> Result<String> {
         info!("Generating clarifying questions...");
 
+        let lang_instruction = match self.config.language.as_str() {
+            "zh" => "请用中文提问。",
+            "en" => "Please ask questions in English.",
+            _ => "请用中文提问。",
+        };
+
         let prompt = format!(
             r#"You are helping plan a software development project.
 
 GOAL: {}
+{}
+
 {}
 
 Generate 3-5 concise, targeted clarifying questions.
@@ -185,7 +196,8 @@ Respond ONLY with JSON:
                 .doc_content
                 .as_ref()
                 .map(|d| format!("DOCUMENT:\n{}", d))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            lang_instruction
         );
 
         let result = self
@@ -291,10 +303,18 @@ Respond ONLY with JSON:
     async fn generate_tasks(&self, _clarification: &str) -> Result<()> {
         info!(goal = %self.config.goal, "Generating task list");
 
+        let lang_instruction = match self.config.language.as_str() {
+            "zh" => "请用中文编写任务标题和描述。",
+            "en" => "Write task titles and descriptions in English.",
+            _ => "请用中文编写任务标题和描述。",
+        };
+
         let prompt = format!(
             r#"You are a software project planner. Break down the following goal into development tasks.
 
 PROJECT GOAL: {}
+
+{}
 
 CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, just the JSON object.
 Do NOT include any text before or after the JSON.
@@ -306,7 +326,7 @@ Example response:
 {{"tasks": [{{"id": "task-001", "title": "Setup project", "description": "Initialize project structure", "depends_on": []}}, {{"id": "task-002", "title": "Create models", "description": "Define data models", "depends_on": ["task-001"]}}]}}
 
 Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
-            self.config.goal
+            self.config.goal, lang_instruction
         );
 
         let result = self
@@ -374,6 +394,12 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
 
         info!(task_id = %task.id, "Assessing complexity");
 
+        let lang_instruction = match self.config.language.as_str() {
+            "zh" => "请用中文回复。",
+            "en" => "Respond in English.",
+            _ => "请用中文回复。",
+        };
+
         let prompt = format!(
             r#"You are a senior software engineer evaluating a development task.
 
@@ -381,13 +407,15 @@ TASK: {}
 DESCRIPTION: {}
 CURRENT DEPTH: {} / {}
 
+{}
+
 Is this task SIMPLE (doable in one claude session) or COMPLEX (needs splitting)?
 
 Respond ONLY with JSON:
 {{"split": false, "reason": "..."}}
 OR if splitting needed:
 {{"split": true, "reason": "...", "subtasks": [{{"title": "...", "description": "..."}}]}}"#,
-            task.title, task.description, task.depth, MAX_DEPTH
+            task.title, task.description, task.depth, MAX_DEPTH, lang_instruction
         );
 
         let result = self
