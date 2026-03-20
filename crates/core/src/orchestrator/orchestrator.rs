@@ -405,6 +405,9 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
                     self.emit_event(Event::TaskCreated {
                         id: task.id.clone(),
                         title: task.title.clone(),
+                        parent_id: task.parent_id.clone(),
+                        depth: task.depth,
+                        depends_on: task.depends_on.clone(),
                     });
                 }
 

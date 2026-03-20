@@ -19,14 +19,20 @@ fn test_event_channel() {
         .send(Event::TaskCreated {
             id: "task-001".to_string(),
             title: "Test".to_string(),
+            parent_id: None,
+            depth: 0,
+            depends_on: vec![],
         })
         .unwrap();
 
     let event = receiver.try_recv().unwrap();
     match event {
-        Event::TaskCreated { id, title } => {
+        Event::TaskCreated { id, title, parent_id, depth, depends_on } => {
             assert_eq!(id, "task-001");
             assert_eq!(title, "Test");
+            assert_eq!(parent_id, None);
+            assert_eq!(depth, 0);
+            assert!(depends_on.is_empty());
         }
         _ => panic!("Wrong event type"),
     }

@@ -9,6 +9,7 @@ pub mod event;
 pub mod markdown;
 pub mod render;
 pub mod terminal;
+pub mod topology;
 pub mod tracing_layer;
 
 /// Channel for orchestrator to send events to TUI

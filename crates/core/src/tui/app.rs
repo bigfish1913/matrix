@@ -80,6 +80,9 @@ pub struct TaskDisplay {
     pub status: TaskStatus,
     pub duration: Option<Duration>,
     pub started_at: Option<Instant>,
+    pub parent_id: Option<String>,
+    pub depth: u32,
+    pub depends_on: Vec<String>,
 }
 
 /// Claude output line
@@ -400,13 +403,16 @@ impl TuiApp {
     /// Process an orchestrator event
     pub fn process_event(&mut self, event: Event) {
         match event {
-            Event::TaskCreated { id, title } => {
+            Event::TaskCreated { id, title, parent_id, depth, depends_on } => {
                 self.tasks.push(TaskDisplay {
                     id,
                     title,
                     status: TaskStatus::Pending,
                     duration: None,
                     started_at: None,
+                    parent_id,
+                    depth,
+                    depends_on,
                 });
                 self.total_count = self.tasks.len();
             }

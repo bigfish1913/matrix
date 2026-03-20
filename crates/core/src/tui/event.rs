@@ -94,6 +94,9 @@ pub enum Event {
     TaskCreated {
         id: String,
         title: String,
+        parent_id: Option<String>,
+        depth: u32,
+        depends_on: Vec<String>,
     },
     TaskStatusChanged {
         id: String,
