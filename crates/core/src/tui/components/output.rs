@@ -43,7 +43,7 @@ impl OutputPanel {
 
     fn format_output_line(line: &OutputLine, verbosity: VerbosityLevel, width: usize) -> Vec<Line<'static>> {
         match line {
-            OutputLine::Thinking { content } => {
+            OutputLine::Thinking { task_id: _, content } => {
                 if verbosity == VerbosityLevel::Verbose {
                     // Parse thinking content as markdown
                     let mut md_lines = render_markdown(content, width);
@@ -58,7 +58,7 @@ impl OutputPanel {
                     vec![]
                 }
             }
-            OutputLine::ToolUse { tool_name, tool_input } => {
+            OutputLine::ToolUse { task_id: _, tool_name, tool_input } => {
                 let input_preview = tool_input
                     .as_ref()
                     .map(|i| format!(" {}", i.chars().take(50).collect::<String>()))
@@ -71,7 +71,7 @@ impl OutputPanel {
                     Span::styled(input_preview, Style::default().fg(Color::DarkGray)),
                 ])]
             }
-            OutputLine::ToolResult { tool_name, result, success } => {
+            OutputLine::ToolResult { task_id: _, tool_name, result, success } => {
                 let icon = if *success { "✓" } else { "✗" };
                 let color = if *success { Color::Green } else { Color::Red };
 
@@ -110,7 +110,7 @@ impl OutputPanel {
 
                 lines
             }
-            OutputLine::Result { content } => {
+            OutputLine::Result { task_id: _, content } => {
                 // Render result as markdown
                 let mut lines = vec![Line::styled("── Result ──", Style::default().fg(Color::Yellow))];
                 let md_lines = render_markdown(content, width);

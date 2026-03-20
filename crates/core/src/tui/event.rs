@@ -199,6 +199,14 @@ pub struct ClarificationQuestion {
     pub question: String,
     /// Predefined options to choose from
     pub options: Vec<String>,
+    /// Pros for each option (parallel to options)
+    pub pros: Vec<String>,
+    /// Cons for each option (parallel to options)
+    pub cons: Vec<String>,
+    /// Index of recommended option (if any)
+    pub recommended: Option<usize>,
+    /// Reason for recommendation
+    pub recommendation_reason: Option<String>,
 }
 
 /// Keyboard event for TUI input

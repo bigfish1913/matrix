@@ -192,9 +192,9 @@ impl Orchestrator {
         info!("Generating clarifying questions...");
 
         let lang_instruction = match self.config.language.as_str() {
-            "zh" => "请用中文提问，选项也用中文。",
-            "en" => "Please ask questions and provide options in English.",
-            _ => "请用中文提问，选项也用中文。",
+            "zh" => "请用中文提问，选项也用中文。优缺点和推荐理由也用中文。",
+            "en" => "Please ask questions and provide options in English. Pros, cons and recommendations also in English.",
+            _ => "请用中文提问，选项也用中文。优缺点和推荐理由也用中文。",
         };
 
         let prompt = format!(
@@ -206,20 +206,39 @@ GOAL: {}
 {}
 
 Generate 3-5 concise, targeted clarifying questions.
-For each question, provide 3-4 common options to choose from.
+For each question, provide 3-4 common options with their pros and cons.
+Also recommend the best option with a reason.
 
 Respond ONLY with JSON array:
 [
   {{
     "question": "Question text?",
-    "options": ["Option 1", "Option 2", "Option 3"]
+    "options": ["Option 1", "Option 2", "Option 3"],
+    "pros": ["Pro for option 1", "Pro for option 2", "Pro for option 3"],
+    "cons": ["Con for option 1", "Con for option 2", "Con for option 3"],
+    "recommended": 0,
+    "recommendation_reason": "Why this option is recommended"
   }}
 ]
 
 Example:
 [
-  {{"question": "项目使用什么编程语言?", "options": ["Rust", "Python", "JavaScript", "Go"]}},
-  {{"question": "是否需要数据库支持?", "options": ["是，需要", "不需要", "不确定"]}}
+  {{
+    "question": "项目使用什么编程语言?",
+    "options": ["Rust", "Python", "JavaScript", "Go"],
+    "pros": ["高性能，内存安全", "开发快速，生态丰富", "前后端通用", "简洁高效，并发强"],
+    "cons": ["学习曲线陡峭", "性能较低", "类型不严格", "生态较小"],
+    "recommended": 0,
+    "recommendation_reason": "Rust提供最佳的性能和安全性，适合长期维护的项目"
+  }},
+  {{
+    "question": "是否需要数据库支持?",
+    "options": ["是，SQLite", "是，PostgreSQL", "不需要", "不确定"],
+    "pros": ["轻量，零配置", "功能强大，可扩展", "简单，无依赖", "稍后决定"],
+    "cons": ["不适合高并发", "需要额外部署", "数据无法持久化", "可能延迟决策"],
+    "recommended": 0,
+    "recommendation_reason": "SQLite简单易用，适合中小型项目快速启动"
+  }}
 ]"#,
             self.config.goal,
             self.config
@@ -253,6 +272,10 @@ Example:
             .map(|rq| ClarificationQuestion {
                 question: rq.question,
                 options: rq.options,
+                pros: rq.pros,
+                cons: rq.cons,
+                recommended: rq.recommended,
+                recommendation_reason: rq.recommendation_reason,
             })
             .collect();
 
@@ -1030,6 +1053,14 @@ struct TaskDefinition {
 struct RawQuestion {
     question: String,
     options: Vec<String>,
+    #[serde(default)]
+    pros: Vec<String>,
+    #[serde(default)]
+    cons: Vec<String>,
+    #[serde(default)]
+    recommended: Option<usize>,
+    #[serde(default)]
+    recommendation_reason: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]

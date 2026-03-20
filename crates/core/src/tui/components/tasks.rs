@@ -137,10 +137,40 @@ impl TasksPanel {
 
     /// Render tasks panel with tree view
     pub fn render(tasks: &[TaskDisplay], selected: usize) -> (List<'static>, ListState) {
+        Self::render_with_mode(tasks, selected, true)
+    }
+
+    /// Render tasks panel with optional tree view
+    pub fn render_with_mode(tasks: &[TaskDisplay], selected: usize, tree_view: bool) -> (List<'static>, ListState) {
+        let items: Vec<ListItem<'static>> = if tree_view {
+            Self::render_tree_view(tasks, selected)
+        } else {
+            Self::render_list_view(tasks, selected)
+        };
+
+        let mut state = ListState::default();
+        state.select(Some(selected));
+
+        let title = if tree_view { " Tasks (Tree) " } else { " Tasks (List) " };
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .style(Style::default()),
+            )
+            .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+            .highlight_symbol("> ");
+
+        (list, state)
+    }
+
+    /// Render as tree view
+    fn render_tree_view(tasks: &[TaskDisplay], selected: usize) -> Vec<ListItem<'static>> {
         let tree = Self::build_tree(tasks);
 
-        let items: Vec<ListItem<'static>> = tree
-            .iter()
+        tree.iter()
             .enumerate()
             .map(|(idx, item)| {
                 let icon = Self::status_icon(item.status);
@@ -197,21 +227,60 @@ impl TasksPanel {
 
                 ListItem::new(Line::from(spans))
             })
-            .collect();
+            .collect()
+    }
 
-        let mut state = ListState::default();
-        state.select(Some(selected));
+    /// Render as flat list view
+    fn render_list_view(tasks: &[TaskDisplay], selected: usize) -> Vec<ListItem<'static>> {
+        tasks.iter()
+            .enumerate()
+            .map(|(idx, task)| {
+                let icon = Self::status_icon(task.status);
+                let color = Self::status_color(task.status);
+                let duration = Self::format_duration(task.duration);
+                let status_text = if task.status == TaskStatus::InProgress {
+                    "Running".to_string()
+                } else if task.status == TaskStatus::Pending {
+                    "Pending".to_string()
+                } else if task.status == TaskStatus::Failed {
+                    "Failed".to_string()
+                } else {
+                    duration
+                };
 
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .title(" Tasks (Tree View) ")
-                    .borders(Borders::ALL)
-                    .style(Style::default()),
-            )
-            .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
-            .highlight_symbol("> ");
+                let is_selected = idx == selected;
+                let title_style = if is_selected {
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
 
-        (list, state)
+                let mut spans = vec![
+                    Span::styled(icon, Style::default().fg(color)),
+                    Span::raw(" "),
+                    Span::styled(task.id.clone(), Style::default().fg(Color::Cyan)),
+                    Span::raw("  "),
+                    Span::styled(
+                        if task.title.chars().count() > 40 {
+                            format!("{}...", task.title.chars().take(37).collect::<String>())
+                        } else {
+                            task.title.clone()
+                        },
+                        title_style,
+                    ),
+                    Span::raw("  "),
+                    Span::styled(status_text, Style::default().fg(Color::DarkGray)),
+                ];
+
+                if !task.depends_on.is_empty() {
+                    spans.push(Span::styled(
+                        format!(" ⬆{}", task.depends_on.len()),
+                        Style::default().fg(Color::Magenta),
+                    ));
+                }
+
+                ListItem::new(Line::from(spans))
+            })
+            .collect()
     }
 }

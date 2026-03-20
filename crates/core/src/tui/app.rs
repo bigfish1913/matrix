@@ -2,6 +2,7 @@
 
 use crate::models::TaskStatus;
 use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventReceiver, ExecutionState, Key, LogBuffer, VerbosityLevel};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// State for resume confirmation dialog
@@ -21,6 +22,60 @@ impl ResumeConfirmState {
 
     pub fn finish(&mut self) {
         self.response_tx = None;
+    }
+}
+
+/// State for quit confirmation dialog
+#[derive(Debug, Default)]
+pub struct QuitConfirmState {
+    pub pending: bool,  // Whether there are pending tasks
+    pub confirmed: bool, // User confirmed quit
+}
+
+impl QuitConfirmState {
+    pub fn is_active(&self) -> bool {
+        self.pending && !self.confirmed
+    }
+}
+
+/// State for task detail panel
+#[derive(Debug, Default)]
+pub struct TaskDetailState {
+    pub task_id: Option<String>,
+}
+
+impl TaskDetailState {
+    pub fn is_active(&self) -> bool {
+        self.task_id.is_some()
+    }
+
+    pub fn close(&mut self) {
+        self.task_id = None;
+    }
+}
+
+/// State for task search/filter
+#[derive(Debug, Default)]
+pub struct SearchState {
+    pub active: bool,
+    pub query: String,
+}
+
+impl SearchState {
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub fn toggle(&mut self) {
+        self.active = !self.active;
+        if !self.active {
+            self.query.clear();
+        }
+    }
+
+    pub fn close(&mut self) {
+        self.active = false;
+        self.query.clear();
     }
 }
 
@@ -66,6 +121,7 @@ impl ClarificationState {
         total > 0 && self.selected_option == total - 1
     }
 }
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tab {
     #[default]
@@ -97,21 +153,23 @@ impl Tab {
 pub struct TaskDisplay {
     pub id: String,
     pub title: String,
+    pub description: String,
     pub status: TaskStatus,
     pub duration: Option<Duration>,
     pub started_at: Option<Instant>,
     pub parent_id: Option<String>,
     pub depth: u32,
     pub depends_on: Vec<String>,
+    pub error: Option<String>,
 }
 
 /// Claude output line
 #[derive(Debug, Clone)]
 pub enum OutputLine {
-    Thinking { content: String },
-    ToolUse { tool_name: String, tool_input: Option<String> },
-    ToolResult { tool_name: String, result: String, success: bool },
-    Result { content: String },
+    Thinking { task_id: String, content: String },
+    ToolUse { task_id: String, tool_name: String, tool_input: Option<String> },
+    ToolResult { task_id: String, tool_name: String, result: String, success: bool },
+    Result { task_id: String, content: String },
 }
 
 /// Main TUI application state
@@ -123,6 +181,7 @@ pub struct TuiApp {
     pub state: ExecutionState,
     pub current_task_id: Option<String>,
     pub current_model: String,
+    pub is_paused: bool,  // Pause execution
 
     // Progress
     pub completed_count: usize,
@@ -137,11 +196,19 @@ pub struct TuiApp {
     // Tasks
     pub tasks: Vec<TaskDisplay>,
     pub tasks_scroll: usize,
+    pub tree_view: bool,  // Toggle between list and tree view
 
-    // Claude output
-    pub output_lines: Vec<OutputLine>,
+    // Task search
+    pub search: SearchState,
+
+    // Task detail
+    pub task_detail: TaskDetailState,
+
+    // Claude output (per-task storage)
+    pub output_by_task: HashMap<String, Vec<OutputLine>>,
+    pub output_lines: Vec<OutputLine>,  // All output (current view)
     pub output_scroll: u16,
-    pub output_task_id: Option<String>,
+    pub output_task_id: Option<String>,  // Currently viewed task output
     pub output_auto_follow: bool,  // Auto-scroll to bottom on new output
 
     // Logs
@@ -164,6 +231,9 @@ pub struct TuiApp {
     // Resume confirmation
     pub resume_confirm: ResumeConfirmState,
 
+    // Quit confirmation
+    pub quit_confirm: QuitConfirmState,
+
     // Running flag
     pub running: bool,
 }
@@ -175,6 +245,7 @@ impl TuiApp {
             state: ExecutionState::default(),
             current_task_id: None,
             current_model: "haiku".to_string(),
+            is_paused: false,
             completed_count: 0,
             total_count: 0,
             failed_count: 0,
@@ -183,18 +254,23 @@ impl TuiApp {
             spinner_frame: 0,
             tasks: Vec::new(),
             tasks_scroll: 0,
+            tree_view: false,
+            search: SearchState::default(),
+            task_detail: TaskDetailState::default(),
+            output_by_task: HashMap::new(),
             output_lines: Vec::new(),
             output_scroll: 0,
             output_task_id: None,
-            output_auto_follow: true,  // Start with auto-follow enabled
+            output_auto_follow: true,
             log_buffer: LogBuffer::default(),
             logs_scroll: 0,
-            logs_auto_follow: true,  // Enable auto-follow for logs (auto-scroll to new logs)
+            logs_auto_follow: true,
             verbosity,
             event_receiver: None,
             show_help: false,
             clarification: ClarificationState::default(),
             resume_confirm: ResumeConfirmState::default(),
+            quit_confirm: QuitConfirmState::default(),
             running: true,
         }
     }
@@ -209,8 +285,64 @@ impl TuiApp {
         self
     }
 
+    /// Get filtered tasks based on search query
+    pub fn filtered_tasks(&self) -> Vec<&TaskDisplay> {
+        if self.search.query.is_empty() {
+            self.tasks.iter().collect()
+        } else {
+            let query = self.search.query.to_lowercase();
+            self.tasks
+                .iter()
+                .filter(|t| {
+                    t.id.to_lowercase().contains(&query) ||
+                    t.title.to_lowercase().contains(&query)
+                })
+                .collect()
+        }
+    }
+
+    /// Get selected task (based on scroll position)
+    pub fn selected_task(&self) -> Option<&TaskDisplay> {
+        let filtered = self.filtered_tasks();
+        filtered.get(self.tasks_scroll.min(filtered.len().saturating_sub(1))).copied()
+    }
+
+    /// Switch output view to specific task
+    pub fn switch_output_to_task(&mut self, task_id: &str) {
+        self.output_task_id = Some(task_id.to_string());
+        if let Some(lines) = self.output_by_task.get(task_id) {
+            self.output_lines = lines.clone();
+        } else {
+            self.output_lines.clear();
+        }
+        self.output_scroll = 0;
+        self.output_auto_follow = true;
+    }
+
+    /// Switch output view to all tasks
+    pub fn switch_output_to_all(&mut self) {
+        self.output_task_id = None;
+        // Combine all outputs sorted by time (approximated by insertion order)
+        let task_ids: Vec<String> = self.tasks.iter().map(|t| t.id.clone()).collect();
+        let mut all_lines: Vec<OutputLine> = Vec::new();
+        for task_id in &task_ids {
+            if let Some(lines) = self.output_by_task.get(task_id.as_str()) {
+                all_lines.extend(lines.clone());
+            }
+        }
+        self.output_lines = all_lines;
+        self.output_scroll = 0;
+        self.output_auto_follow = true;
+    }
+
     /// Handle keyboard input
     pub fn handle_key(&mut self, key: Key) {
+        // Handle search input mode
+        if self.search.is_active() {
+            self.handle_search_key(key);
+            return;
+        }
+
         // Handle resume confirmation first
         if self.resume_confirm.is_active() {
             self.handle_resume_confirm_key(key);
@@ -220,6 +352,18 @@ impl TuiApp {
         // Handle clarification questions
         if self.clarification.is_active() {
             self.handle_clarification_key(key);
+            return;
+        }
+
+        // Handle task detail panel
+        if self.task_detail.is_active() {
+            self.handle_task_detail_key(key);
+            return;
+        }
+
+        // Handle quit confirmation
+        if self.quit_confirm.is_active() {
+            self.handle_quit_confirm_key(key);
             return;
         }
 
@@ -249,9 +393,99 @@ impl TuiApp {
                 self.show_help = true;
             }
             Key::Char('q') | Key::Esc => {
-                self.running = false;
+                self.try_quit();
+            }
+            Key::Char('p') => {
+                self.is_paused = !self.is_paused;
+            }
+            Key::Char('t') => {
+                if self.current_tab == Tab::Tasks {
+                    self.tree_view = !self.tree_view;
+                }
+            }
+            Key::Char('/') => {
+                if self.current_tab == Tab::Tasks {
+                    self.search.toggle();
+                }
+            }
+            Key::Enter => {
+                if self.current_tab == Tab::Tasks {
+                    if let Some(task) = self.selected_task() {
+                        self.task_detail.task_id = Some(task.id.clone());
+                    }
+                }
+            }
+            Key::Char('a') => {
+                if self.current_tab == Tab::Output {
+                    self.switch_output_to_all();
+                }
+            }
+            Key::Char(c) if c.is_ascii_digit() => {
+                // 1-9: Switch to specific task output
+                if self.current_tab == Tab::Output {
+                    let num = c.to_digit(10).unwrap() as usize;
+                    if num > 0 && num <= self.tasks.len() {
+                        let task_id = self.tasks[num - 1].id.clone();
+                        self.switch_output_to_task(&task_id);
+                    }
+                }
             }
             _ => {}
+        }
+    }
+
+    /// Handle search input
+    fn handle_search_key(&mut self, key: Key) {
+        match key {
+            Key::Char(c) => {
+                self.search.query.push(c);
+                // Reset scroll to first match
+                self.tasks_scroll = 0;
+            }
+            Key::Backspace => {
+                self.search.query.pop();
+            }
+            Key::Esc => {
+                self.search.close();
+            }
+            Key::Enter => {
+                self.search.close();
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle task detail panel keys
+    fn handle_task_detail_key(&mut self, key: Key) {
+        match key {
+            Key::Esc | Key::Char('q') | Key::Enter => {
+                self.task_detail.close();
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle quit confirmation
+    fn handle_quit_confirm_key(&mut self, key: Key) {
+        match key {
+            Key::Char('y') | Key::Char('Y') | Key::Char('q') => {
+                self.quit_confirm.confirmed = true;
+                self.running = false;
+            }
+            Key::Char('n') | Key::Char('N') | Key::Esc => {
+                self.quit_confirm.pending = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Try to quit (with confirmation if tasks running)
+    fn try_quit(&mut self) {
+        let has_pending = self.tasks.iter().any(|t| t.status == TaskStatus::Pending || t.status == TaskStatus::InProgress);
+        if has_pending && !self.quit_confirm.confirmed {
+            self.quit_confirm.pending = true;
+        } else {
+            self.running = false;
         }
     }
 
@@ -408,7 +642,6 @@ impl TuiApp {
             }
             Tab::Logs => {
                 self.logs_scroll = 0;
-                // Keep auto-follow enabled (user preference)
             }
         }
     }
@@ -422,12 +655,10 @@ impl TuiApp {
             }
             Tab::Output => {
                 self.output_scroll = self.output_scroll.saturating_sub(1);
-                // User manually scrolled up, disable auto-follow
                 self.output_auto_follow = false;
             }
             Tab::Logs => {
                 self.logs_scroll = self.logs_scroll.saturating_sub(1);
-                // User manually scrolled up, disable auto-follow
                 self.logs_auto_follow = false;
             }
         }
@@ -436,17 +667,16 @@ impl TuiApp {
     fn scroll_down(&mut self) {
         match self.current_tab {
             Tab::Tasks => {
-                if self.tasks_scroll < self.tasks.len().saturating_sub(1) {
+                let filtered = self.filtered_tasks();
+                if self.tasks_scroll < filtered.len().saturating_sub(1) {
                     self.tasks_scroll += 1;
                 }
             }
             Tab::Output => {
-                // Check if we're at or near bottom
                 let max_scroll = self.output_lines.len() as u16;
                 if self.output_scroll < max_scroll {
                     self.output_scroll = self.output_scroll.saturating_add(1);
                 }
-                // If scrolled near bottom, re-enable auto-follow
                 if self.output_scroll >= max_scroll.saturating_sub(5) {
                     self.output_auto_follow = true;
                 }
@@ -457,7 +687,6 @@ impl TuiApp {
                 if self.logs_scroll < max_scroll {
                     self.logs_scroll = self.logs_scroll.saturating_add(1);
                 }
-                // Re-enable auto-follow when scrolled near bottom (consistent with Output panel)
                 if self.logs_scroll >= max_scroll.saturating_sub(5) {
                     self.logs_auto_follow = true;
                 }
@@ -470,82 +699,90 @@ impl TuiApp {
         match event {
             Event::TaskCreated { id, title, parent_id, depth, depends_on } => {
                 self.tasks.push(TaskDisplay {
-                    id,
+                    id: id.clone(),
                     title,
+                    description: String::new(),
                     status: TaskStatus::Pending,
                     duration: None,
                     started_at: None,
                     parent_id,
                     depth,
                     depends_on,
+                    error: None,
                 });
                 self.total_count = self.tasks.len();
+                // Initialize output storage for this task
+                self.output_by_task.insert(id, Vec::new());
             }
             Event::TaskStatusChanged { id, status } => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
-                    // Track when task starts
                     if status == TaskStatus::InProgress && task.started_at.is_none() {
                         task.started_at = Some(Instant::now());
                     }
-                    // Calculate duration from per-task start time
                     if status == TaskStatus::Completed {
                         task.duration = task.started_at.map(|s| s.elapsed());
                     }
                     task.status = status;
                 }
 
-                // Update counts
                 self.completed_count = self.tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
                 self.failed_count = self.tasks.iter().filter(|t| t.status == TaskStatus::Failed).count();
 
-                // Track current task and task start time
                 if status == TaskStatus::InProgress {
                     self.current_task_id = Some(id.clone());
-                    self.task_start_time = Some(Instant::now());  // Reset task timer
+                    self.task_start_time = Some(Instant::now());
                 } else if self.current_task_id.as_ref() == Some(&id) {
                     self.current_task_id = None;
-                    self.task_start_time = None;  // Clear task timer
+                    self.task_start_time = None;
                 }
             }
             Event::TaskProgress { id, message } => {
-                // Could be shown in output panel
-                let _ = (id, message); // For now, ignore
+                // Store progress message in task description or error
+                if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
+                    task.description = message;
+                }
             }
             Event::ClaudeThinking { task_id, content } => {
-                if self.verbosity == VerbosityLevel::Verbose {
-                    self.output_task_id = Some(task_id);
-                    self.output_lines.push(OutputLine::Thinking { content });
+                let line = OutputLine::Thinking { task_id: task_id.clone(), content };
+                self.output_by_task.entry(task_id.clone()).or_default().push(line.clone());
+                if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
+                    self.output_lines.push(line);
                 }
             }
             Event::ClaudeToolUse { task_id, tool_name, tool_input } => {
-                self.output_task_id = Some(task_id);
                 if self.verbosity >= VerbosityLevel::Normal {
-                    self.output_lines.push(OutputLine::ToolUse { tool_name, tool_input });
+                    let line = OutputLine::ToolUse { task_id: task_id.clone(), tool_name, tool_input };
+                    self.output_by_task.entry(task_id.clone()).or_default().push(line.clone());
+                    if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
+                        self.output_lines.push(line);
+                    }
                 }
             }
             Event::ClaudeToolResult { task_id, tool_name, result, success } => {
-                self.output_task_id = Some(task_id);
                 if self.verbosity >= VerbosityLevel::Normal {
-                    self.output_lines.push(OutputLine::ToolResult { tool_name, result, success });
+                    let line = OutputLine::ToolResult { task_id: task_id.clone(), tool_name, result, success };
+                    self.output_by_task.entry(task_id.clone()).or_default().push(line.clone());
+                    if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
+                        self.output_lines.push(line);
+                    }
                 }
             }
             Event::ClaudeResult { task_id, result } => {
-                self.output_task_id = Some(task_id);
-                self.output_lines.push(OutputLine::Result { content: result });
+                let line = OutputLine::Result { task_id: task_id.clone(), content: result };
+                self.output_by_task.entry(task_id.clone()).or_default().push(line.clone());
+                if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
+                    self.output_lines.push(line);
+                }
             }
             Event::Log { timestamp, level, message } => {
                 self.log_buffer.push(level, message);
-                let _ = timestamp; // LogEntry uses Utc::now()
-                // Auto-scroll if auto-follow is enabled
+                let _ = timestamp;
                 if self.logs_auto_follow {
-                    // Scroll will be calculated in render based on viewport height
-                    // Just mark that we need to recalculate
-                    self.logs_scroll = u16::MAX; // Signal to recalculate in render
+                    self.logs_scroll = u16::MAX;
                 }
             }
             Event::ExecutionStateChanged { state } => {
                 self.state = state;
-                // Start timer on any non-idle state (Clarifying, Running, etc.)
                 if state != ExecutionState::Idle && self.start_time.is_none() {
                     self.start_time = Some(Instant::now());
                 }
@@ -572,7 +809,7 @@ impl TuiApp {
                 self.resume_confirm.completed = completed;
                 self.resume_confirm.pending = pending;
                 self.resume_confirm.failed = failed;
-                self.resume_confirm.selected = true;  // Default to Resume
+                self.resume_confirm.selected = true;
                 self.resume_confirm.response_tx = Some(response_tx);
             }
         }
@@ -580,7 +817,6 @@ impl TuiApp {
 
     /// Try to receive and process events (non-blocking)
     pub fn poll_events(&mut self) {
-        // Collect all events first to avoid borrowing issues
         let events: Vec<Event> = if let Some(ref mut receiver) = self.event_receiver {
             std::iter::from_fn(|| receiver.try_recv().ok()).collect()
         } else {
@@ -589,21 +825,6 @@ impl TuiApp {
         for event in events {
             self.process_event(event);
         }
-    }
-
-    /// Try to receive and process events, returning count of processed events
-    pub fn poll_events_count(&mut self) -> usize {
-        // Collect all events first to avoid borrowing issues
-        let events: Vec<Event> = if let Some(ref mut receiver) = self.event_receiver {
-            std::iter::from_fn(|| receiver.try_recv().ok()).collect()
-        } else {
-            Vec::new()
-        };
-        let count = events.len();
-        for event in events {
-            self.process_event(event);
-        }
-        count
     }
 
     /// Get elapsed time as formatted string
@@ -619,6 +840,15 @@ impl TuiApp {
             None => "00:00".to_string(),
         }
     }
+
+    /// Get progress percentage
+    pub fn progress_percent(&self) -> u8 {
+        if self.total_count == 0 {
+            0
+        } else {
+            ((self.completed_count + self.failed_count) * 100 / self.total_count) as u8
+        }
+    }
 }
 
 #[cfg(test)]
@@ -627,7 +857,6 @@ mod tests {
 
     #[test]
     fn test_tab_navigation() {
-        // New order: Logs -> Tasks -> Output -> Logs
         assert_eq!(Tab::Logs.next(), Tab::Tasks);
         assert_eq!(Tab::Tasks.next(), Tab::Output);
         assert_eq!(Tab::Output.next(), Tab::Logs);
@@ -640,22 +869,34 @@ mod tests {
     #[test]
     fn test_tui_app_new() {
         let app = TuiApp::new(VerbosityLevel::Normal);
-        assert_eq!(app.current_tab, Tab::Logs);  // Default is now Logs
+        assert_eq!(app.current_tab, Tab::Logs);
         assert_eq!(app.verbosity, VerbosityLevel::Normal);
         assert!(app.running);
+        assert!(!app.is_paused);
+        assert!(!app.tree_view);
     }
 
     #[test]
     fn test_handle_key_tab() {
         let mut app = TuiApp::new(VerbosityLevel::Normal);
         app.handle_key(Key::Tab);
-        assert_eq!(app.current_tab, Tab::Tasks);  // Logs -> Tasks
+        assert_eq!(app.current_tab, Tab::Tasks);
     }
 
     #[test]
-    fn test_handle_key_quit() {
+    fn test_handle_key_pause() {
         let mut app = TuiApp::new(VerbosityLevel::Normal);
-        app.handle_key(Key::Char('q'));
-        assert!(!app.running);
+        app.handle_key(Key::Char('p'));
+        assert!(app.is_paused);
+        app.handle_key(Key::Char('p'));
+        assert!(!app.is_paused);
+    }
+
+    #[test]
+    fn test_search_toggle() {
+        let mut app = TuiApp::new(VerbosityLevel::Normal);
+        app.current_tab = Tab::Tasks;
+        app.handle_key(Key::Char('/'));
+        assert!(app.search.is_active());
     }
 }

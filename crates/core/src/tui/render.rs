@@ -1,6 +1,7 @@
 // crates/core/src/tui/render.rs
 
-use crate::tui::app::TuiApp;
+use crate::models::TaskStatus;
+use crate::tui::app::{OutputLine, Tab, TaskDisplay, TuiApp};
 use crate::tui::components::{LogsPanel, OutputPanel, StatusBar, TabSwitcher, TasksPanel};
 use crate::tui::markdown::render_markdown;
 use ratatui::{
@@ -8,8 +9,8 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph, Gauge},
     Frame,
-    widgets::{Block, Borders, Clear, Paragraph},
     Terminal,
 };
 
@@ -27,16 +28,14 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         ])
         .split(frame.area());
 
-    // Render tab switcher
+    // Render tab switcher with additional info
     let tabs = TabSwitcher::render(app.current_tab);
     frame.render_widget(tabs, chunks[0]);
 
     // Render main content based on current tab
     match app.current_tab {
-        crate::tui::app::Tab::Logs => {
-            // Calculate scroll for auto-follow
+        Tab::Logs => {
             let entries = app.log_buffer.get_entries();
-            // Calculate viewport height (subtract borders: 2 lines for top/bottom borders)
             let viewport_height = chunks[1].height.saturating_sub(2);
             let scroll = if app.logs_auto_follow {
                 LogsPanel::calculate_auto_scroll(entries.len(), viewport_height)
@@ -46,14 +45,19 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
             let paragraph = LogsPanel::render(&entries, scroll, viewport_height);
             frame.render_widget(paragraph, chunks[1]);
         }
-        crate::tui::app::Tab::Tasks => {
-            let (list, state) = TasksPanel::render(&app.tasks, app.tasks_scroll);
+        Tab::Tasks => {
+            let filtered: Vec<TaskDisplay> = app.filtered_tasks().into_iter().cloned().collect();
+            let (list, state) = TasksPanel::render_with_mode(&filtered, app.tasks_scroll, app.tree_view);
             frame.render_stateful_widget(list, chunks[1], &mut state.clone());
+
+            // Render search box if active
+            if app.search.is_active() {
+                render_search_box(frame, app);
+            }
         }
-        crate::tui::app::Tab::Output => {
-            // Calculate scroll for auto-follow
+        Tab::Output => {
             let scroll = if app.output_auto_follow {
-                app.output_lines.len() as u16  // Scroll to bottom
+                app.output_lines.len() as u16
             } else {
                 app.output_scroll
             };
@@ -64,14 +68,29 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
                 scroll,
             );
             frame.render_widget(paragraph, chunks[1]);
+
+            // Render output task indicator
+            if let Some(task_id) = &app.output_task_id {
+                render_output_task_indicator(frame, task_id, app.tasks.len());
+            }
         }
     }
 
-    // Render status bar
+    // Render status bar with progress
     let version = env!("CARGO_PKG_VERSION");
     let task_elapsed = app.task_start_time
         .map(|start| start.elapsed())
         .unwrap_or_default();
+
+    // Create status bar with progress bar
+    let status_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(20),  // Status text
+            Constraint::Length(20), // Progress bar
+        ])
+        .split(chunks[2]);
+
     let status = StatusBar::render(
         app.state,
         app.current_task_id.as_deref(),
@@ -85,39 +104,292 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         app.verbosity,
         version,
     );
-    frame.render_widget(status, chunks[2]);
+    frame.render_widget(status, status_chunks[0]);
 
-    // Render help overlay if active
+    // Progress bar
+    if app.total_count > 0 {
+        let progress = app.progress_percent();
+        let progress_color = if app.failed_count > 0 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+        let gauge = Gauge::default()
+            .block(Block::default())
+            .gauge_style(Style::default().fg(progress_color))
+            .ratio(progress as f64 / 100.0)
+            .label(format!(" {}% ", progress));
+        frame.render_widget(gauge, status_chunks[1]);
+    }
+
+    // Render overlays in order (last = topmost)
+
+    // Help overlay
     if app.show_help {
         render_help_overlay(frame);
     }
 
-    // Render resume confirmation dialog if active
-    if app.resume_confirm.is_active() {
-        render_resume_confirm_dialog(frame, app);
-        return;  // Don't render clarification if resume confirm is active
+    // Task detail panel
+    if app.task_detail.is_active() {
+        render_task_detail_panel(frame, app);
     }
 
-    // Render clarification dialog if active
+    // Quit confirmation
+    if app.quit_confirm.is_active() {
+        render_quit_confirm_dialog(frame);
+    }
+
+    // Resume confirmation
+    if app.resume_confirm.is_active() {
+        render_resume_confirm_dialog(frame, app);
+        return;
+    }
+
+    // Clarification dialog
     if app.clarification.is_active() {
         render_clarification_dialog(frame, app);
     }
+
+    // Pause indicator
+    if app.is_paused {
+        render_paused_indicator(frame);
+    }
+}
+
+fn render_search_box(frame: &mut Frame, app: &TuiApp) {
+    let area = Rect {
+        x: frame.area().width.saturating_sub(40),
+        y: 1,
+        width: 38.min(frame.area().width),
+        height: 3,
+    };
+    frame.render_widget(Clear, area);
+
+    let search_text = format!("Search: {}", app.search.query);
+    let paragraph = Paragraph::new(search_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" / ")
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(paragraph, area);
+}
+
+fn render_output_task_indicator(frame: &mut Frame, task_id: &str, total_tasks: usize) {
+    let text = format!(" Viewing: {} | 'a' for all ", task_id);
+    let area = Rect {
+        x: frame.area().width.saturating_sub(text.len() as u16 + 4),
+        y: 1,
+        width: (text.len() + 4) as u16,
+        height: 1,
+    };
+
+    let paragraph = Paragraph::new(text)
+        .style(Style::default().fg(Color::Cyan).bg(Color::Black));
+
+    frame.render_widget(paragraph, area);
+}
+
+fn render_task_detail_panel(frame: &mut Frame, app: &TuiApp) {
+    let area = centered_rect(70, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if let Some(task_id) = &app.task_detail.task_id {
+        if let Some(task) = app.tasks.iter().find(|t| &t.id == task_id) {
+            // Header
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Task: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&task.id, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::from(""));
+
+            // Title
+            lines.push(Line::from(vec![
+                Span::styled("Title: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&task.title, Style::default().fg(Color::White)),
+            ]));
+
+            // Status
+            let status_color = match task.status {
+                TaskStatus::Pending => Color::Yellow,
+                TaskStatus::InProgress => Color::Cyan,
+                TaskStatus::Completed => Color::Green,
+                TaskStatus::Failed => Color::Red,
+                TaskStatus::Skipped => Color::DarkGray,
+            };
+            let status_text = format!("{:?}", task.status);
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(status_text, Style::default().fg(status_color)),
+            ]));
+
+            // Duration
+            if let Some(duration) = &task.duration {
+                let secs = duration.as_secs();
+                let mins = secs / 60;
+                let secs = secs % 60;
+                lines.push(Line::from(vec![
+                    Span::styled("Duration: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{}m {}s", mins, secs), Style::default().fg(Color::White)),
+                ]));
+            }
+
+            // Depth
+            lines.push(Line::from(vec![
+                Span::styled("Depth: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(task.depth.to_string(), Style::default().fg(Color::White)),
+            ]));
+
+            // Parent
+            if let Some(parent) = &task.parent_id {
+                lines.push(Line::from(vec![
+                    Span::styled("Parent: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(parent, Style::default().fg(Color::Magenta)),
+                ]));
+            }
+
+            // Dependencies
+            if !task.depends_on.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Depends on:", Style::default().fg(Color::DarkGray)),
+                ]));
+                for dep in &task.depends_on {
+                    lines.push(Line::from(vec![
+                        Span::raw("  → "),
+                        Span::styled(dep, Style::default().fg(Color::Yellow)),
+                    ]));
+                }
+            }
+
+            // Description
+            if !task.description.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Description:", Style::default().fg(Color::DarkGray)),
+                ]));
+                let desc_lines = render_markdown(&task.description, area.width.saturating_sub(4) as usize);
+                lines.extend(desc_lines);
+            }
+
+            // Error
+            if let Some(error) = &task.error {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Error:", Style::default().fg(Color::Red)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled(error, Style::default().fg(Color::Red)),
+                ]));
+            }
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("Task not found", Style::default().fg(Color::Red)),
+            ]));
+        }
+    }
+
+    // Help
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("─".repeat(40), Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" Esc/Enter ", Style::default().fg(Color::Yellow)),
+        Span::styled("close", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Task Details ")
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+
+    frame.render_widget(paragraph, area);
+}
+
+fn render_quit_confirm_dialog(frame: &mut Frame) {
+    let area = centered_rect(50, 20, frame.area());
+    frame.render_widget(Clear, area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  ⚠️  Tasks are still running!", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Quit anyway? ", Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Y ", Style::default().fg(Color::Yellow)),
+            Span::styled("quit  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" N/Esc ", Style::default().fg(Color::Yellow)),
+            Span::styled("cancel", Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Confirm Quit ")
+                .border_style(Style::default().fg(Color::Red)),
+        );
+
+    frame.render_widget(paragraph, area);
+}
+
+fn render_paused_indicator(frame: &mut Frame) {
+    let text = " ⏸ PAUSED ";
+    let area = Rect {
+        x: 2,
+        y: frame.area().height.saturating_sub(2),
+        width: text.len() as u16,
+        height: 1,
+    };
+
+    let paragraph = Paragraph::new(text)
+        .style(Style::default().fg(Color::Black).bg(Color::Yellow));
+
+    frame.render_widget(paragraph, area);
 }
 
 fn render_help_overlay(frame: &mut Frame) {
-    let area = centered_rect(60, 50, frame.area());
+    let area = centered_rect(65, 70, frame.area());
     frame.render_widget(Clear, area);
 
     let help_text = r#"
-╭─────────────────────────────────────╮
-│            Keyboard Help            │
-├─────────────────────────────────────┤
-│  Tab / →     Next tab               │
-│  Shift+Tab / ←  Previous tab        │
-│  ↑ / ↓       Scroll                 │
-│  ?           Show this help         │
-│  q / Esc     Quit                   │
-╰─────────────────────────────────────╯
+╭───────────────────────────────────────────╮
+│              Keyboard Shortcuts            │
+├───────────────────────────────────────────┤
+│  Tab / →        Next tab                   │
+│  Shift+Tab / ←  Previous tab               │
+│  ↑ / ↓          Scroll                     │
+│  ?              Show this help              │
+│  q / Esc        Quit                       │
+├───────────────────────────────────────────┤
+│  Tasks Tab:                               │
+│  Enter          View task details          │
+│  /              Search tasks               │
+│  t              Toggle tree view           │
+├───────────────────────────────────────────┤
+│  Output Tab:                              │
+│  1-9            View task N output         │
+│  a              View all output            │
+├───────────────────────────────────────────┤
+│  Global:                                  │
+│  p              Pause/Resume execution     │
+╰───────────────────────────────────────────╯
 "#;
 
     let paragraph = Paragraph::new(help_text)
@@ -128,7 +400,7 @@ fn render_help_overlay(frame: &mut Frame) {
 }
 
 fn render_resume_confirm_dialog(frame: &mut Frame, app: &TuiApp) {
-    let area = centered_rect(70, 40, frame.area());
+    let area = centered_rect(70, 45, frame.area());
     frame.render_widget(Clear, area);
 
     let resume = &app.resume_confirm;
@@ -156,7 +428,7 @@ fn render_resume_confirm_dialog(frame: &mut Frame, app: &TuiApp) {
     ]));
     lines.push(Line::from(""));
 
-    // Options
+    // Options with pros/cons
     let resume_style = if resume.selected {
         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
     } else {
@@ -168,20 +440,58 @@ fn render_resume_confirm_dialog(frame: &mut Frame, app: &TuiApp) {
         Style::default().fg(Color::DarkGray)
     };
 
+    // Resume option
     lines.push(Line::from(vec![
         Span::styled(if resume.selected { "  → [●] " } else { "    [ ] " }, resume_style),
         Span::styled("Resume from existing tasks", resume_style),
     ]));
+    lines.push(Line::from(vec![
+        Span::styled("       ✓ ", Style::default().fg(Color::Green)),
+        Span::styled("Continue progress, no rework", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("       ✗ ", Style::default().fg(Color::Red)),
+        Span::styled("May inherit old context/issues", Style::default().fg(Color::DarkGray)),
+    ]));
     lines.push(Line::from(""));
+
+    // Fresh option
     lines.push(Line::from(vec![
         Span::styled(if !resume.selected { "  → [●] " } else { "    [ ] " }, fresh_style),
         Span::styled("Start fresh (clear all tasks)", fresh_style),
     ]));
+    lines.push(Line::from(vec![
+        Span::styled("       ✓ ", Style::default().fg(Color::Green)),
+        Span::styled("Clean slate, fresh AI context", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("       ✗ ", Style::default().fg(Color::Red)),
+        Span::styled("Loses all progress", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(""));
+
+    // Recommendation
+    if resume.pending > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  💡 ", Style::default().fg(Color::Cyan)),
+            Span::styled("Recommended: Resume (tasks pending)", Style::default().fg(Color::Cyan)),
+        ]));
+    } else if resume.failed > resume.completed {
+        lines.push(Line::from(vec![
+            Span::styled("  💡 ", Style::default().fg(Color::Cyan)),
+            Span::styled("Recommended: Start Fresh (many failures)", Style::default().fg(Color::Cyan)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("  💡 ", Style::default().fg(Color::Cyan)),
+            Span::styled("Recommended: Resume (preserve progress)", Style::default().fg(Color::Cyan)),
+        ]));
+    }
     lines.push(Line::from(""));
 
     // Help
     lines.push(Line::from(vec![
-        Span::styled("─".repeat(45), Style::default().fg(Color::DarkGray)),
+        Span::styled("─".repeat(50), Style::default().fg(Color::DarkGray)),
     ]));
     lines.push(Line::from(vec![
         Span::styled(" ←/→ ", Style::default().fg(Color::Yellow)),
@@ -224,12 +534,12 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
-    let area = centered_rect(80, 70, frame.area());
+    let area = centered_rect(80, 75, frame.area());
     frame.render_widget(Clear, area);
 
     let clarification = &app.clarification;
     let mut lines: Vec<Line> = Vec::new();
-    let width = area.width.saturating_sub(4) as usize; // Account for borders
+    let width = area.width.saturating_sub(4) as usize;
 
     // Header
     lines.push(Line::from(vec![
@@ -237,188 +547,126 @@ fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
     ]));
     lines.push(Line::from(""));
 
-    // Show all questions
-    for (i, q) in clarification.questions.iter().enumerate() {
-        if i < clarification.current_index {
-            // Already answered
-            let answer = if i < clarification.answers.len() {
-                &clarification.answers[i]
-            } else {
-                ""
-            };
+    // Show current question with options including pros/cons
+    if let Some(q) = clarification.questions.get(clarification.current_index) {
+        // Question
+        let q_lines = render_markdown(&q.question, width);
+        let highlight_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
 
-            // Render question as markdown
-            let q_lines = render_markdown(&q.question, width);
-            if q_lines.is_empty() {
-                lines.push(Line::from(vec![
-                    Span::styled("✓ ", Style::default().fg(Color::Green)),
-                    Span::styled(&q.question, Style::default().fg(Color::DarkGray)),
-                ]));
-            } else {
-                for (idx, q_line) in q_lines.into_iter().enumerate() {
-                    let mut spans: Vec<Span> = Vec::new();
-                    if idx == 0 {
-                        spans.push(Span::styled("✓ ", Style::default().fg(Color::Green)));
-                    } else {
-                        spans.push(Span::raw("  "));
-                    }
-                    // Dim the question
-                    for span in q_line.spans {
-                        spans.push(Span::styled(span.content, Style::default().fg(Color::DarkGray)));
-                    }
-                    lines.push(Line::from(spans));
-                }
-            }
-
-            // Answer
+        if q_lines.is_empty() {
             lines.push(Line::from(vec![
-                Span::raw("    "),
-                Span::styled("→ ", Style::default().fg(Color::Green)),
-                Span::styled(answer, Style::default().fg(Color::White)),
+                Span::styled("▶ ", highlight_style),
+                Span::styled(&q.question, highlight_style),
             ]));
-            lines.push(Line::from(""));
-        } else if i == clarification.current_index {
-            // Current question - render as markdown with highlight
-            let q_lines = render_markdown(&q.question, width);
-            let highlight_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-
-            if q_lines.is_empty() {
-                lines.push(Line::from(vec![
-                    Span::styled("▶ ", highlight_style),
-                    Span::styled(&q.question, highlight_style),
-                ]));
-            } else {
-                for (idx, q_line) in q_lines.into_iter().enumerate() {
-                    let mut spans: Vec<Span> = Vec::new();
-                    if idx == 0 {
-                        spans.push(Span::styled("▶ ", highlight_style));
-                    } else {
-                        spans.push(Span::raw("  "));
-                    }
-                    // Apply highlight style to all spans
-                    for span in q_line.spans {
-                        let styled = if span.style.fg.is_none() {
-                            Span::styled(span.content, highlight_style)
-                        } else {
-                            span
-                        };
-                        spans.push(styled);
-                    }
-                    lines.push(Line::from(spans));
-                }
-            }
-            lines.push(Line::from(""));
-
-            // Show options with markdown support
-            for (opt_idx, opt) in q.options.iter().enumerate() {
-                let is_selected = clarification.selected_option == opt_idx;
-                let prefix = if is_selected { "  ◉ " } else { "  ○ " };
-                let num = format!("{}. ", opt_idx + 1);
-                let style = if is_selected {
-                    Style::default().fg(Color::Yellow)
+        } else {
+            for (idx, q_line) in q_lines.into_iter().enumerate() {
+                let mut spans: Vec<Span> = Vec::new();
+                if idx == 0 {
+                    spans.push(Span::styled("▶ ", highlight_style));
                 } else {
-                    Style::default().fg(Color::White)
-                };
-
-                // Render option as markdown
-                let opt_lines = render_markdown(opt, width.saturating_sub(6));
-                if opt_lines.is_empty() || opt_lines.len() == 1 {
-                    // Single line or empty - render inline
-                    let opt_text = if opt_lines.is_empty() {
-                        opt.clone()
+                    spans.push(Span::raw("  "));
+                }
+                for span in q_line.spans {
+                    let styled = if span.style.fg.is_none() {
+                        Span::styled(span.content, highlight_style)
                     } else {
-                        opt_lines[0].spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+                        span
                     };
-                    lines.push(Line::from(vec![
-                        Span::styled(prefix, style),
-                        Span::styled(num, Style::default().fg(Color::Cyan)),
-                        Span::styled(opt_text, style),
-                    ]));
-                } else {
-                    // Multi-line markdown
-                    for (line_idx, opt_line) in opt_lines.into_iter().enumerate() {
-                        if line_idx == 0 {
-                            let mut spans = vec![
-                                Span::styled(prefix, style),
-                                Span::styled(num.clone(), Style::default().fg(Color::Cyan)),
-                            ];
-                            for span in opt_line.spans {
-                                spans.push(Span::styled(span.content, style));
-                            }
-                            lines.push(Line::from(spans));
-                        } else {
-                            let mut spans = vec![Span::raw("       ")]; // Align with option text
-                            for span in opt_line.spans {
-                                spans.push(Span::styled(span.content, style));
-                            }
-                            lines.push(Line::from(spans));
-                        }
-                    }
+                    spans.push(styled);
                 }
+                lines.push(Line::from(spans));
             }
+        }
+        lines.push(Line::from(""));
 
-            // "Other" option
-            let other_idx = q.options.len();
-            let is_other_selected = clarification.selected_option == other_idx;
-            let other_prefix = if is_other_selected { "  ◉ " } else { "  ○ " };
-            let other_style = if is_other_selected {
+        // Options (simplified - pros/cons would need to be generated by AI)
+        for (opt_idx, opt) in q.options.iter().enumerate() {
+            let is_selected = clarification.selected_option == opt_idx;
+            let prefix = if is_selected { "  ◉ " } else { "  ○ " };
+            let num = format!("{}. ", opt_idx + 1);
+            let style = if is_selected {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default().fg(Color::White)
             };
-            lines.push(Line::from(vec![
-                Span::styled(other_prefix, other_style),
-                Span::styled(format!("{}. ", other_idx + 1), Style::default().fg(Color::Cyan)),
-                Span::styled("Other (custom input)", other_style),
-            ]));
 
-            // If in custom input mode, show input field
-            if clarification.is_custom_input {
-                lines.push(Line::from(""));
+            let opt_lines = render_markdown(opt, width.saturating_sub(6));
+            if opt_lines.is_empty() || opt_lines.len() == 1 {
+                let opt_text = if opt_lines.is_empty() {
+                    opt.clone()
+                } else {
+                    opt_lines[0].spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+                };
                 lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled("┌─ ", Style::default().fg(Color::Magenta)),
-                    Span::styled("Your answer:", Style::default().fg(Color::Magenta)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled("│ ", Style::default().fg(Color::Magenta)),
-                    Span::styled(&clarification.custom_input, Style::default().fg(Color::White)),
-                    Span::styled("█", Style::default().fg(Color::Yellow)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled("└─", Style::default().fg(Color::Magenta)),
-                ]));
-            }
-
-            lines.push(Line::from(""));
-        } else {
-            // Future question - render as markdown dimmed
-            let q_lines = render_markdown(&q.question, width);
-
-            if q_lines.is_empty() {
-                lines.push(Line::from(vec![
-                    Span::styled("○ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(&q.question, Style::default().fg(Color::DarkGray)),
+                    Span::styled(prefix, style),
+                    Span::styled(num, Style::default().fg(Color::Cyan)),
+                    Span::styled(opt_text, style),
                 ]));
             } else {
-                for (idx, q_line) in q_lines.into_iter().enumerate() {
-                    let mut spans: Vec<Span> = Vec::new();
-                    if idx == 0 {
-                        spans.push(Span::styled("○ ", Style::default().fg(Color::DarkGray)));
+                for (line_idx, opt_line) in opt_lines.into_iter().enumerate() {
+                    if line_idx == 0 {
+                        let mut spans = vec![
+                            Span::styled(prefix, style),
+                            Span::styled(num.clone(), Style::default().fg(Color::Cyan)),
+                        ];
+                        for span in opt_line.spans {
+                            spans.push(Span::styled(span.content, style));
+                        }
+                        lines.push(Line::from(spans));
                     } else {
-                        spans.push(Span::raw("  "));
+                        let mut spans = vec![Span::raw("       ")];
+                        for span in opt_line.spans {
+                            spans.push(Span::styled(span.content, style));
+                        }
+                        lines.push(Line::from(spans));
                     }
-                    for span in q_line.spans {
-                        spans.push(Span::styled(span.content, Style::default().fg(Color::DarkGray)));
-                    }
-                    lines.push(Line::from(spans));
                 }
             }
-            lines.push(Line::from(""));
         }
+
+        // "Other" option
+        let other_idx = q.options.len();
+        let is_other_selected = clarification.selected_option == other_idx;
+        let other_prefix = if is_other_selected { "  ◉ " } else { "  ○ " };
+        let other_style = if is_other_selected {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(other_prefix, other_style),
+            Span::styled(format!("{}. ", other_idx + 1), Style::default().fg(Color::Cyan)),
+            Span::styled("Other (custom input)", other_style),
+        ]));
+
+        // Custom input field
+        if clarification.is_custom_input {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("┌─ ", Style::default().fg(Color::Magenta)),
+                Span::styled("Your answer:", Style::default().fg(Color::Magenta)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("│ ", Style::default().fg(Color::Magenta)),
+                Span::styled(&clarification.custom_input, Style::default().fg(Color::White)),
+                Span::styled("█", Style::default().fg(Color::Yellow)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("└─", Style::default().fg(Color::Magenta)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
     }
+
+    // Progress indicator
+    lines.push(Line::from(vec![
+        Span::styled(format!(" Question {}/{} ", clarification.current_index + 1, clarification.questions.len()),
+            Style::default().fg(Color::DarkGray)),
+    ]));
 
     // Help text
     lines.push(Line::from(vec![
@@ -449,7 +697,7 @@ fn render_clarification_dialog(frame: &mut Frame, app: &TuiApp) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" Question {}/{} ", clarification.current_index + 1, clarification.questions.len()))
+                .title(" Clarification ")
                 .border_style(Style::default().fg(Color::Cyan)),
         );
 
