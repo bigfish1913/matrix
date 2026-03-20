@@ -36,11 +36,8 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         Tab::Logs => {
             let entries = app.log_buffer.get_entries();
             let viewport_height = chunks[1].height.saturating_sub(2);
-            let scroll = if app.logs_auto_follow {
-                LogsPanel::calculate_auto_scroll(entries.len(), viewport_height)
-            } else {
-                app.logs_scroll
-            };
+            // When auto-follow is on, scroll to show latest (use logs_scroll which is set to max)
+            let scroll = app.logs_scroll;
             let paragraph = LogsPanel::render(&entries, scroll, viewport_height);
             frame.render_widget(paragraph, chunks[1]);
         }

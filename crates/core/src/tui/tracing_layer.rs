@@ -47,44 +47,76 @@ where
             _ => return, // Already filtered above
         };
 
-        // Format the message
+        // Format the message and extract context
         let mut message = String::new();
-        let mut visitor = MessageVisitor(&mut message);
+        let mut task_id = None;
+        let mut task_title = None;
+        let mut phase = None;
+
+        let mut visitor = ContextAwareVisitor {
+            message: &mut message,
+            task_id: &mut task_id,
+            task_title: &mut task_title,
+            phase: &mut phase,
+        };
         event.record(&mut visitor);
 
-        // Send to TUI
+        // Send to TUI with context
         let timestamp = chrono::Utc::now();
         let _ = self.sender.send(Event::Log {
             timestamp,
             level: log_level,
             message,
+            task_id,
+            task_title,
+            phase,
         });
     }
 }
 
-/// A visitor to extract the message from tracing fields
-struct MessageVisitor<'a>(&'a mut String);
+/// A visitor to extract the message and context from tracing fields
+struct ContextAwareVisitor<'a> {
+    message: &'a mut String,
+    task_id: &'a mut Option<String>,
+    task_title: &'a mut Option<String>,
+    phase: &'a mut Option<String>,
+}
 
-impl<'a> tracing::field::Visit for MessageVisitor<'a> {
+impl<'a> tracing::field::Visit for ContextAwareVisitor<'a> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
-        if field.name() == "message" {
-            self.0.push_str(&format!("{:?}", value));
-        } else {
-            if !self.0.is_empty() {
-                self.0.push_str(", ");
+        match field.name() {
+            "message" => self.message.push_str(&format!("{:?}", value)),
+            "task_id" | "id" => {
+                *self.task_id = Some(format!("{:?}", value).trim_matches('"').to_string())
             }
-            self.0.push_str(&format!("{}={:?}", field.name(), value));
+            "title" | "task_title" => {
+                *self.task_title = Some(format!("{:?}", value).trim_matches('"').to_string())
+            }
+            "phase" => {
+                *self.phase = Some(format!("{:?}", value).trim_matches('"').to_string())
+            }
+            _ => {
+                // Include other fields in message
+                if !self.message.is_empty() {
+                    self.message.push_str(", ");
+                }
+                self.message.push_str(&format!("{}={:?}", field.name(), value));
+            }
         }
     }
 
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if field.name() == "message" {
-            self.0.push_str(value);
-        } else {
-            if !self.0.is_empty() {
-                self.0.push_str(", ");
+        match field.name() {
+            "message" => self.message.push_str(value),
+            "task_id" | "id" => *self.task_id = Some(value.to_string()),
+            "title" | "task_title" => *self.task_title = Some(value.to_string()),
+            "phase" => *self.phase = Some(value.to_string()),
+            _ => {
+                if !self.message.is_empty() {
+                    self.message.push_str(", ");
+                }
+                self.message.push_str(&format!("{}={}", field.name(), value));
             }
-            self.0.push_str(&format!("{}={}", field.name(), value));
         }
     }
 }

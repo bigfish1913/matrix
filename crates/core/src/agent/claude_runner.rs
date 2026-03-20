@@ -83,7 +83,7 @@ impl ClaudeRunner {
         self
     }
 
-    /// Call Claude CLI with a prompt
+    /// Call Claude CLI with a prompt (with retry on timeout)
     pub async fn call(
         &self,
         prompt: &str,
@@ -93,6 +93,7 @@ impl ClaudeRunner {
         resume_session_id: Option<&str>,
     ) -> Result<ClaudeResult> {
         let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(120));
+        const MAX_RETRIES: usize = 3;
 
         // Truncate prompt if too long
         let prompt = if prompt.len() > MAX_PROMPT_LENGTH {
@@ -106,13 +107,35 @@ impl ClaudeRunner {
             prompt.to_string()
         };
 
-        if self.debug_mode {
-            // Use streaming mode for real-time output
-            self.call_streaming(&prompt, workdir, timeout_duration, mcp_config, resume_session_id).await
-        } else {
-            // Use batch mode
-            self.call_batch(&prompt, workdir, timeout_duration, mcp_config, resume_session_id).await
+        let mut last_error = None;
+
+        for attempt in 1..=MAX_RETRIES {
+            let result = if self.debug_mode {
+                // Use streaming mode for real-time output
+                self.call_streaming(&prompt, workdir, timeout_duration, mcp_config, resume_session_id).await
+            } else {
+                // Use batch mode
+                self.call_batch(&prompt, workdir, timeout_duration, mcp_config, resume_session_id).await
+            };
+
+            match result {
+                Ok(r) => return Ok(r),
+                Err(Error::Timeout(msg)) => {
+                    warn!(attempt, max_retries = MAX_RETRIES, "Timeout on attempt {}: {}", attempt, msg);
+                    last_error = Some(Error::Timeout(format!("{} (attempt {}/{})", msg, attempt, MAX_RETRIES)));
+
+                    // Wait before retry (exponential backoff)
+                    if attempt < MAX_RETRIES {
+                        let delay = Duration::from_secs(2u64.pow(attempt as u32));
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+                Err(e) => return Err(e), // Non-timeout errors are not retried
+            }
         }
+
+        // All retries failed
+        Err(last_error.unwrap_or(Error::Timeout("All retry attempts failed".to_string())))
     }
 
     /// Batch mode - wait for completion

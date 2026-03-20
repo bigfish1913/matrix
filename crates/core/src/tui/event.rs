@@ -63,6 +63,14 @@ impl std::fmt::Display for LogLevel {
     }
 }
 
+/// Context for structured logging
+#[derive(Debug, Clone, Default)]
+pub struct LogContext {
+    pub task_id: Option<String>,
+    pub task_title: Option<String>,
+    pub phase: Option<String>,
+}
+
 /// Wrapper for oneshot sender that implements Clone
 #[derive(Debug)]
 pub struct AnswerSender(Arc<Mutex<Option<tokio::sync::oneshot::Sender<Vec<String>>>>>);
@@ -171,6 +179,12 @@ pub enum Event {
         result: String,
         success: bool,
     },
+    ClaudeRequest {
+        task_id: String,
+        prompt: String,
+        model: String,
+        timeout_secs: u64,
+    },
     ClaudeResult {
         task_id: String,
         result: String,
@@ -181,6 +195,9 @@ pub enum Event {
         timestamp: chrono::DateTime<chrono::Utc>,
         level: LogLevel,
         message: String,
+        task_id: Option<String>,
+        task_title: Option<String>,
+        phase: Option<String>,
     },
 
     // Execution state
@@ -261,6 +278,8 @@ pub enum Key {
     Esc,
     Question,
     Enter,
+    PageUp,
+    PageDown,
 }
 
 /// Event type enum for event loop

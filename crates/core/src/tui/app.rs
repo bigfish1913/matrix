@@ -3,7 +3,7 @@
 use crate::models::TaskStatus;
 use crate::tui::{
     ClarificationQuestion, ClarificationSender, ConfirmSender, Event, EventReceiver,
-    ExecutionState, Key, LogBuffer, VerbosityLevel,
+    ExecutionState, Key, LogBuffer, LogContext, VerbosityLevel,
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -257,6 +257,7 @@ pub struct TuiApp {
     pub output_scroll: u16,
     pub output_task_id: Option<String>, // Currently viewed task output
     pub output_auto_follow: bool,       // Auto-scroll to bottom on new output
+    pub max_output_lines: usize,        // Maximum lines to keep in output
 
     // Logs
     pub log_buffer: LogBuffer,
@@ -314,6 +315,7 @@ impl TuiApp {
             output_scroll: 0,
             output_task_id: None,
             output_auto_follow: true,
+            max_output_lines: 500,
             log_buffer: LogBuffer::default(),
             logs_scroll: 0,
             logs_auto_follow: true,
@@ -387,6 +389,33 @@ impl TuiApp {
         self.output_lines = all_lines;
         self.output_scroll = 0;
         self.output_auto_follow = true;
+    }
+
+    /// Add output line with automatic trimming
+    fn add_output_line(&mut self, task_id: String, line: OutputLine) {
+        // Add to per-task storage
+        self.output_by_task
+            .entry(task_id.clone())
+            .or_default()
+            .push(line.clone());
+
+        // Trim per-task storage if needed
+        if let Some(lines) = self.output_by_task.get_mut(&task_id) {
+            if lines.len() > self.max_output_lines {
+                let remove_count = lines.len() - self.max_output_lines;
+                lines.drain(0..remove_count);
+            }
+        }
+
+        // Add to current view if applicable
+        if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
+            self.output_lines.push(line);
+            // Trim current view if needed
+            if self.output_lines.len() > self.max_output_lines {
+                let remove_count = self.output_lines.len() - self.max_output_lines;
+                self.output_lines.drain(0..remove_count);
+            }
+        }
     }
 
     /// Handle keyboard input
@@ -713,8 +742,13 @@ impl TuiApp {
     fn log_clarification_summary(&mut self) {
         use crate::tui::LogLevel;
 
+        let context = LogContext {
+            phase: Some("clarification".to_string()),
+            ..Default::default()
+        };
+
         self.log_buffer
-            .push(LogLevel::Info, "━━━ Clarification Summary ━━━".to_string());
+            .push(LogLevel::Info, "━━━ Clarification Summary ━━━".to_string(), context.clone());
 
         for (i, question) in self.clarification.questions.iter().enumerate() {
             let answer = self
@@ -730,13 +764,13 @@ impl TuiApp {
                 question.question.clone()
             };
             self.log_buffer
-                .push(LogLevel::Info, format!("Q{}: {}", i + 1, q_display));
+                .push(LogLevel::Info, format!("Q{}: {}", i + 1, q_display), context.clone());
             self.log_buffer
-                .push(LogLevel::Info, format!("  → {}", answer));
+                .push(LogLevel::Info, format!("  → {}", answer), context.clone());
         }
 
         self.log_buffer
-            .push(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string());
+            .push(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string(), context);
 
         // Auto-scroll logs to show summary
         if self.logs_auto_follow {
@@ -872,13 +906,7 @@ impl TuiApp {
                     task_id: task_id.clone(),
                     content,
                 };
-                self.output_by_task
-                    .entry(task_id.clone())
-                    .or_default()
-                    .push(line.clone());
-                if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
-                    self.output_lines.push(line);
-                }
+                self.add_output_line(task_id, line);
             }
             Event::ClaudeToolUse {
                 task_id,
@@ -891,15 +919,7 @@ impl TuiApp {
                         tool_name,
                         tool_input,
                     };
-                    self.output_by_task
-                        .entry(task_id.clone())
-                        .or_default()
-                        .push(line.clone());
-                    if self.output_task_id.is_none()
-                        || self.output_task_id.as_ref() == Some(&task_id)
-                    {
-                        self.output_lines.push(line);
-                    }
+                    self.add_output_line(task_id, line);
                 }
             }
             Event::ClaudeToolResult {
@@ -915,36 +935,39 @@ impl TuiApp {
                         result,
                         success,
                     };
-                    self.output_by_task
-                        .entry(task_id.clone())
-                        .or_default()
-                        .push(line.clone());
-                    if self.output_task_id.is_none()
-                        || self.output_task_id.as_ref() == Some(&task_id)
-                    {
-                        self.output_lines.push(line);
-                    }
+                    self.add_output_line(task_id, line);
                 }
+            }
+            Event::ClaudeRequest { task_id, prompt, model, timeout_secs } => {
+                // Show request details in output panel
+                let header = format!("═══ Claude Request ═══\nModel: {} | Timeout: {}s", model, timeout_secs);
+                let line = OutputLine::Result {
+                    task_id: task_id.clone(),
+                    content: format!("{}\n\n{}", header, prompt),
+                };
+                self.add_output_line(task_id, line);
             }
             Event::ClaudeResult { task_id, result } => {
                 let line = OutputLine::Result {
                     task_id: task_id.clone(),
                     content: result,
                 };
-                self.output_by_task
-                    .entry(task_id.clone())
-                    .or_default()
-                    .push(line.clone());
-                if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
-                    self.output_lines.push(line);
-                }
+                self.add_output_line(task_id, line);
             }
             Event::Log {
                 timestamp,
                 level,
                 message,
+                task_id,
+                task_title,
+                phase,
             } => {
-                self.log_buffer.push(level, message);
+                let context = LogContext {
+                    task_id,
+                    task_title,
+                    phase,
+                };
+                self.log_buffer.push(level, message, context);
                 let _ = timestamp;
                 if self.logs_auto_follow {
                     self.logs_scroll = u16::MAX;

@@ -107,6 +107,8 @@ fn keycode_to_key(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
         KeyCode::Esc => Some(Key::Esc),
         KeyCode::Enter => Some(Key::Enter),
         KeyCode::Char('?') => Some(Key::Question),
+        KeyCode::PageUp => Some(Key::PageUp),
+        KeyCode::PageDown => Some(Key::PageDown),
         KeyCode::Char(c) => Some(Key::Char(c)),
         _ => None,
     }

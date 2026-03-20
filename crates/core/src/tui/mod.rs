@@ -37,6 +37,10 @@ pub struct LogEntry {
     pub level: LogLevel,
     pub message: String,
     pub repeat_count: usize, // Number of times this message pattern was repeated
+    // Context fields for grouping
+    pub task_id: Option<String>,
+    pub task_title: Option<String>,
+    pub phase: Option<String>,
 }
 
 impl LogBuffer {
@@ -69,7 +73,7 @@ impl LogBuffer {
     }
 
     /// Push a new log entry (deduplicates exact matches and pattern matches)
-    pub fn push(&self, level: LogLevel, message: String) {
+    pub fn push(&self, level: LogLevel, message: String, context: event::LogContext) {
         let mut entries = self.entries.lock().unwrap();
 
         // Skip empty messages
@@ -79,11 +83,15 @@ impl LogBuffer {
 
         let pattern = Self::extract_pattern(&message);
 
-        // Check if this matches the pattern of the last message
+        // Check if this matches the pattern of the last message (same context)
         if let Some(last) = entries.last_mut() {
             let last_pattern = Self::extract_pattern(&last.message);
-            if last.level == level && last_pattern == pattern {
-                // Same pattern, increment repeat count
+            if last.level == level
+                && last_pattern == pattern
+                && last.task_id == context.task_id
+                && last.phase == context.phase
+            {
+                // Same pattern and context, increment repeat count
                 last.repeat_count += 1;
                 return;
             }
@@ -95,6 +103,9 @@ impl LogBuffer {
             level,
             message,
             repeat_count: 1,
+            task_id: context.task_id,
+            task_title: context.task_title,
+            phase: context.phase,
         };
         entries.push(entry);
         if entries.len() > self.max_entries {
@@ -117,7 +128,7 @@ impl Default for LogBuffer {
 pub use app::TuiApp;
 pub use event::{
     ClarificationQuestion, ClarificationSender, ConfirmSender, Event, ExecutionState, Key,
-    LogLevel, TuiEvent, VerbosityLevel,
+    LogContext, LogLevel, TuiEvent, VerbosityLevel,
 };
 pub use render::{render_app, MatrixTerminal};
 pub use terminal::{event_stream, init_terminal, restore_terminal, TerminalGuard};

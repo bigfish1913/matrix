@@ -47,11 +47,12 @@ fn test_event_channel() {
 #[test]
 fn test_log_buffer() {
     let buffer = LogBuffer::new(3);
+    let ctx = LogContext::default();
 
-    buffer.push(LogLevel::Info, "msg1".to_string());
-    buffer.push(LogLevel::Warn, "msg2".to_string());
-    buffer.push(LogLevel::Error, "msg3".to_string());
-    buffer.push(LogLevel::Debug, "msg4".to_string()); // Should push out msg1
+    buffer.push(LogLevel::Info, "msg1".to_string(), ctx.clone());
+    buffer.push(LogLevel::Warn, "msg2".to_string(), ctx.clone());
+    buffer.push(LogLevel::Error, "msg3".to_string(), ctx.clone());
+    buffer.push(LogLevel::Debug, "msg4".to_string(), ctx); // Should push out msg1
 
     let entries = buffer.get_entries();
     assert_eq!(entries.len(), 3);
@@ -62,24 +63,25 @@ fn test_log_buffer() {
 #[test]
 fn test_log_buffer_dedup() {
     let buffer = LogBuffer::new(10);
+    let ctx = LogContext::default();
 
     // Push same message multiple times - should dedupe
-    buffer.push(LogLevel::Info, "test message".to_string());
-    buffer.push(LogLevel::Info, "test message".to_string());
-    buffer.push(LogLevel::Info, "test message".to_string());
+    buffer.push(LogLevel::Info, "test message".to_string(), ctx.clone());
+    buffer.push(LogLevel::Info, "test message".to_string(), ctx.clone());
+    buffer.push(LogLevel::Info, "test message".to_string(), ctx.clone());
 
     let entries = buffer.get_entries();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].repeat_count, 3);
 
     // Different level should not be deduped
-    buffer.push(LogLevel::Warn, "test message".to_string());
+    buffer.push(LogLevel::Warn, "test message".to_string(), ctx.clone());
     let entries = buffer.get_entries();
     assert_eq!(entries.len(), 2);
 
     // Empty message should be skipped
-    buffer.push(LogLevel::Info, "".to_string());
-    buffer.push(LogLevel::Info, "   ".to_string());
+    buffer.push(LogLevel::Info, "".to_string(), ctx.clone());
+    buffer.push(LogLevel::Info, "   ".to_string(), ctx);
     let entries = buffer.get_entries();
     assert_eq!(entries.len(), 2); // No new entries added
 }
@@ -87,11 +89,12 @@ fn test_log_buffer_dedup() {
 #[test]
 fn test_log_buffer_pattern_dedup() {
     let buffer = LogBuffer::new(10);
+    let ctx = LogContext::default();
 
     // Messages with different numbers but same pattern should be deduped
-    buffer.push(LogLevel::Info, "Progress: 1 completed".to_string());
-    buffer.push(LogLevel::Info, "Progress: 2 completed".to_string());
-    buffer.push(LogLevel::Info, "Progress: 10 completed".to_string());
+    buffer.push(LogLevel::Info, "Progress: 1 completed".to_string(), ctx.clone());
+    buffer.push(LogLevel::Info, "Progress: 2 completed".to_string(), ctx.clone());
+    buffer.push(LogLevel::Info, "Progress: 10 completed".to_string(), ctx);
 
     let entries = buffer.get_entries();
     assert_eq!(entries.len(), 1);

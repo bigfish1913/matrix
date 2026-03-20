@@ -184,6 +184,22 @@ impl TaskExecutor {
         task.status = TaskStatus::InProgress;
         self.store.save_task(task).await?;
 
+        // Emit request event (for verbose mode)
+        if self.config.debug_mode {
+            // Truncate prompt for display
+            let prompt_preview = if prompt.len() > 500 {
+                format!("{}...\n[truncated, total {} chars]", &prompt[..500], prompt.len())
+            } else {
+                prompt.clone()
+            };
+            self.emit_event(Event::ClaudeRequest {
+                task_id: task.id.clone(),
+                prompt: prompt_preview,
+                model: model.clone(),
+                timeout_secs: TIMEOUT_EXEC,
+            });
+        }
+
         // Call Claude
         let result = self
             .runner
@@ -198,7 +214,7 @@ impl TaskExecutor {
 
         match result {
             Ok(claude_result) if claude_result.is_error => {
-                warn!(task_id = %task.id, error = %claude_result.text, "Execution failed");
+                warn!(task_id = %task.id, title = %task.title, error = %claude_result.text, "Execution failed");
                 task.error = Some(claude_result.text.clone());
                 self.emit_event(Event::ClaudeResult {
                     task_id: task.id.clone(),
@@ -223,11 +239,11 @@ impl TaskExecutor {
                         task_id: task.id.clone(),
                         tokens_used: usage.total_tokens,
                     });
-                    info!(task_id = %task.id, tokens = usage.total_tokens, "Token usage");
+                    info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage");
                 }
 
                 let stats = self.agent_pool.stats().await;
-                info!(task_id = %task.id, stats = %stats, "Task executed");
+                info!(task_id = %task.id, title = %task.title, stats = %stats, "Task executed");
 
                 // Emit result event
                 self.emit_event(Event::ClaudeResult {
@@ -238,7 +254,7 @@ impl TaskExecutor {
                 Ok(true)
             }
             Err(e) => {
-                warn!(task_id = %task.id, error = %e, "Execution error");
+                warn!(task_id = %task.id, title = %task.title, error = %e, "Execution error");
                 task.error = Some(e.to_string());
                 self.emit_event(Event::ClaudeResult {
                     task_id: task.id.clone(),
@@ -251,7 +267,7 @@ impl TaskExecutor {
 
     /// Run tests for a task
     pub async fn test(&self, task: &mut Task) -> Result<(bool, String)> {
-        info!(task_id = %task.id, "Running tests");
+        info!(task_id = %task.id, title = %task.title, "Running tests");
 
         let runner = TestRunnerDetector::detect(&self.workspace);
 
@@ -276,15 +292,15 @@ impl TaskExecutor {
                 let combined = format!("{}\n{}", stdout, stderr);
 
                 if output.status.success() {
-                    info!(task_id = %task.id, "Tests passed");
+                    info!(task_id = %task.id, title = %task.title, "Tests passed");
                     Ok((true, combined))
                 } else {
-                    warn!(task_id = %task.id, "Tests failed");
+                    warn!(task_id = %task.id, title = %task.title, "Tests failed");
                     Ok((false, combined))
                 }
             }
             Err(e) => {
-                warn!(task_id = %task.id, error = %e, "Test command failed");
+                warn!(task_id = %task.id, title = %task.title, error = %e, "Test command failed");
                 Ok((false, e.to_string()))
             }
         }
@@ -292,7 +308,7 @@ impl TaskExecutor {
 
     /// Attempt to fix test failures
     pub async fn fix_test_failure(&self, task: &mut Task, test_output: &str) -> Result<bool> {
-        info!(task_id = %task.id, "Attempting to fix test failures");
+        info!(task_id = %task.id, title = %task.title, "Attempting to fix test failures");
 
         let prompt = format!(
             r#"You are a senior developer fixing test failures.
@@ -324,10 +340,10 @@ Respond with a brief summary of what you fixed."#,
                 task_id: task.id.clone(),
                 tokens_used: usage.total_tokens,
             });
-            info!(task_id = %task.id, tokens = usage.total_tokens, "Token usage (fix)");
+            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (fix)");
         }
 
-        info!(task_id = %task.id, summary = %result.text, "Fix applied");
+        info!(task_id = %task.id, title = %task.title, summary = %result.text, "Fix applied");
         Ok(true)
     }
 

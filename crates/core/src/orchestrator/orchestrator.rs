@@ -143,7 +143,10 @@ impl Orchestrator {
                 String::new()
             };
 
-            // Generate new tasks
+            // Generate project roadmap document (Phase 1.5)
+            self.generate_project_roadmap(&clarification).await?;
+
+            // Generate new tasks (Phase 2)
             self.emit_event(Event::ExecutionStateChanged {
                 state: ExecutionState::Generating,
             });
@@ -190,7 +193,7 @@ impl Orchestrator {
 
     /// Phase 0: Interactive clarification with multiple choice questions
     async fn clarify_goal(&self) -> Result<String> {
-        info!("Phase 0: Starting clarification...");
+        info!(phase = "clarification", "Phase 0: Starting clarification...");
 
         let lang_instruction = match self.config.language.as_str() {
             "zh" => "请用中文提问，选项也用中文。优缺点和推荐理由也用中文。",
@@ -267,12 +270,11 @@ Example:
                 task_id: "clarification".to_string(),
                 tokens_used: usage.total_tokens,
             });
-            info!(tokens = usage.total_tokens, "Token usage (clarification)");
+            info!(phase = "clarification", tokens = usage.total_tokens, "Token usage");
         }
 
         // Log raw response for debugging
-        info!("Clarification response length: {} chars", result.text.len());
-        info!("Clarification raw response: {}", result.text);
+        info!(phase = "clarification", "Clarification response length: {} chars", result.text.len());
 
         // Try to extract JSON array from response (may be in markdown code block)
         let json_text = if let Some(json) = extract_json_from_markdown(&result.text) {
@@ -286,12 +288,11 @@ Example:
         // Parse questions with options
         let raw_questions: Vec<RawQuestion> = match serde_json::from_str::<Vec<RawQuestion>>(&json_text) {
             Ok(q) => {
-                info!("Parsed {} clarification questions", q.len());
+                info!(phase = "clarification", "Parsed {} questions", q.len());
                 q
             }
             Err(e) => {
-                warn!("Failed to parse clarification questions JSON: {}", e);
-                info!("Raw response: {}", result.text);
+                warn!(phase = "clarification", "Failed to parse questions JSON: {}", e);
                 return Ok(String::new());
             }
         };
@@ -312,13 +313,13 @@ Example:
         // Check if in TUI mode
         if let Some(ref sender) = self.config.event_sender {
             // TUI mode: send questions via event channel and wait for answers
-            info!("Sending {} clarification questions to TUI...", questions.len());
+            info!(phase = "clarification", "Sending {} questions to TUI...", questions.len());
             let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
             match sender.send(Event::ClarificationQuestions {
                 questions: questions.clone(),
                 response_tx: AnswerSender::new(tx),
             }) {
-                Ok(_) => info!("ClarificationQuestions event sent successfully"),
+                Ok(_) => info!(phase = "clarification", "Questions sent to TUI"),
                 Err(e) => {
                     warn!("Failed to send ClarificationQuestions event: {}", e);
                     return Ok(String::new());
@@ -326,12 +327,12 @@ Example:
             }
 
             // Wait for answers from TUI (with timeout in case TUI is closed)
-            info!("Waiting for TUI clarification answers...");
+            info!(phase = "clarification", "Waiting for answers...");
             match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {
                 Ok(Ok(answers)) => {
-                    info!("Received {} answers from TUI", answers.len());
+                    info!(phase = "clarification", "Received {} answers", answers.len());
                     if answers.is_empty() || answers.iter().all(|a| a.trim().is_empty()) {
-                        warn!("All answers are empty, skipping clarification");
+                        warn!(phase = "clarification", "All answers empty, skipping");
                         return Ok(String::new());
                     }
                     let formatted: Vec<String> = questions
@@ -339,15 +340,15 @@ Example:
                         .zip(answers.iter())
                         .map(|(q, a): (&ClarificationQuestion, &String)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
                         .collect();
-                    info!("Clarification completed successfully");
+                    info!(phase = "clarification", "Completed successfully");
                     return Ok(formatted.join("\n\n"));
                 }
                 Ok(Err(_)) => {
-                    warn!("Failed to receive clarification answers from TUI");
+                    warn!(phase = "clarification", "Failed to receive answers");
                     return Ok(String::new());
                 }
                 Err(_) => {
-                    warn!("Timeout waiting for clarification answers from TUI");
+                    warn!(phase = "clarification", "Timeout waiting for answers");
                     return Ok(String::new());
                 }
             }
@@ -485,8 +486,79 @@ Example:
         false
     }
 
+    /// Generate project roadmap document based on clarification answers
+    async fn generate_project_roadmap(&self, clarification: &str) -> Result<()> {
+        info!(phase = "generating", "Generating project roadmap...");
+
+        let lang_instruction = match self.config.language.as_str() {
+            "zh" => "请用中文编写规划文档。",
+            "en" => "Write the planning document in English.",
+            _ => "请用中文编写规划文档。",
+        };
+
+        let clarification_section = if !clarification.is_empty() {
+            format!("\n\nCLARIFICATION (User's answers):\n{}\n", clarification)
+        } else {
+            String::new()
+        };
+
+        let prompt = format!(
+            r#"You are a software project planner. Create a detailed project roadmap document.
+
+PROJECT GOAL: {}
+{}{}
+
+{}
+
+Create a comprehensive ROADMAP.md document that includes:
+1. Project Overview - Brief description of what we're building
+2. Architecture Decisions - Key technical choices and rationale
+3. Implementation Phases - Logical groupings of work with dependencies
+4. Technical Requirements - Libraries, frameworks, tools needed
+5. Success Criteria - How to verify each phase is complete
+
+Output ONLY the markdown content for ROADMAP.md (no code blocks, just the raw markdown).
+Start with # Project Roadmap"#,
+            self.config.goal,
+            self.config.doc_content.as_ref().map(|d| format!("\nDOCUMENT:\n{}", d)).unwrap_or_default(),
+            clarification_section,
+            lang_instruction
+        );
+
+        let result = self
+            .executor
+            .runner
+            .call(&prompt, &self.config.workspace, Some(120), None, None)
+            .await?;
+
+        if result.is_error {
+            warn!("Failed to generate project roadmap: {}", result.text);
+            return Ok(()); // Non-fatal, continue without roadmap
+        }
+
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: "generate_roadmap".to_string(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(tokens = usage.total_tokens, "Token usage (generate_roadmap)");
+        }
+
+        // Save roadmap to workspace
+        let roadmap_path = self.config.workspace.join("ROADMAP.md");
+        fs::write(&roadmap_path, &result.text).await?;
+        info!("Project roadmap saved to ROADMAP.md");
+
+        // Also log a summary
+        let summary: String = result.text.lines().take(20).collect::<Vec<_>>().join("\n");
+        info!("Roadmap preview:\n{}", summary);
+
+        Ok(())
+    }
+
     async fn generate_tasks(&self, clarification: &str) -> Result<()> {
-        info!(goal = %self.config.goal, "Generating task list");
+        info!(phase = "generating", goal = %self.config.goal, "Generating task list");
 
         let lang_instruction = match self.config.language.as_str() {
             "zh" => "请用中文编写任务标题和描述。",
@@ -501,11 +573,29 @@ Example:
             String::new()
         };
 
+        // Include roadmap if it exists
+        let roadmap_path = self.config.workspace.join("ROADMAP.md");
+        let roadmap_section = if roadmap_path.exists() {
+            if let Ok(roadmap) = tokio::fs::read_to_string(&roadmap_path).await {
+                // Truncate if too long
+                let truncated = if roadmap.len() > 4000 {
+                    format!("{}...\n[truncated]", &roadmap[..4000])
+                } else {
+                    roadmap
+                };
+                format!("\n\nPROJECT ROADMAP (Reference this for task breakdown):\n{}\n", truncated)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
         let prompt = format!(
             r#"You are a software project planner. Break down the following goal into development tasks.
 
 PROJECT GOAL: {}
-{}{}
+{}{}{}
 
 CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, just the JSON object.
 Do NOT include any text before or after the JSON.
@@ -521,7 +611,10 @@ Example response:
 {{"tasks": [{{"id": "task-001", "title": "Setup project", "description": "Initialize project structure", "depends_on": []}}, {{"id": "task-002", "title": "Create models", "description": "Define data models", "depends_on": ["task-001"]}}]}}
 
 Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
-            self.config.goal, clarification_section, lang_instruction
+            self.config.goal,
+            self.config.doc_content.as_ref().map(|d| format!("\nDOCUMENT:\n{}", d)).unwrap_or_default(),
+            clarification_section,
+            roadmap_section
         );
 
         let result = self
@@ -831,12 +924,12 @@ OR if splitting needed:
 
     /// Phase 5: Final tests
     async fn run_final_tests(&self) -> Result<()> {
-        info!("Running final tests...");
+        info!(phase = "testing", "Running final tests...");
 
         let runner = match crate::detector::TestRunnerDetector::detect(&self.config.workspace) {
             Some(r) => r,
             None => {
-                info!("No test runner detected, skipping final tests");
+                info!(phase = "testing", "No test runner detected, skipping");
                 return Ok(());
             }
         };
@@ -852,19 +945,19 @@ OR if splitting needed:
                 let stdout = String::from_utf8_lossy(&output.stdout);
 
                 if output.status.success() {
-                    info!("Final tests passed");
+                    info!(phase = "testing", "Final tests passed");
                     if self.config.event_sender.is_none() {
                         println!("\nFinal tests passed\n");
                     }
                 } else {
-                    warn!("Final tests failed");
+                    warn!(phase = "testing", "Final tests failed");
                     if self.config.event_sender.is_none() {
                         println!("\nFinal tests failed:\n{}\n", stdout);
                     }
                 }
             }
             Err(e) => {
-                warn!(error = %e, "Final tests could not run");
+                warn!(phase = "testing", error = %e, "Final tests could not run");
             }
         }
 
@@ -1069,12 +1162,13 @@ OR if splitting needed:
 
         // In TUI mode, use tracing instead of println to avoid interfering with TUI
         if self.config.event_sender.is_some() {
-            info!("{}", "=".repeat(45));
+            info!(phase = "summary", "{}", "=".repeat(45));
             info!(
+                phase = "summary",
                 "All tasks processed: {}/{} completed, {} failed",
                 completed, total, failed
             );
-            info!("{}", "=".repeat(45));
+            info!(phase = "summary", "{}", "=".repeat(45));
         } else {
             println!();
             println!("{}", "=".repeat(45));
