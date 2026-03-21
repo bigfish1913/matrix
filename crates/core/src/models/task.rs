@@ -176,6 +176,55 @@ impl TaskMemory {
             && self.solutions.is_empty()
             && self.key_info.is_empty()
     }
+
+    /// Merge this task memory to global memory
+    pub async fn merge_to_global(
+        &self,
+        global: &mut crate::GlobalMemory,
+        task: &Task,
+    ) -> crate::error::Result<()> {
+        if self.is_empty() {
+            return Ok(());
+        }
+
+        let mut content = String::new();
+
+        if !self.learnings.is_empty() {
+            content.push_str("### 经验教训\n");
+            for l in &self.learnings {
+                content.push_str(&format!("- {}\n", l));
+            }
+        }
+
+        if !self.code_changes.is_empty() {
+            content.push_str("### 代码变更\n");
+            for c in &self.code_changes {
+                content.push_str(&format!("- `{}`: {}\n", c.path, c.description));
+            }
+        }
+
+        if !self.solutions.is_empty() {
+            content.push_str("### 问题解决\n");
+            for s in &self.solutions {
+                content.push_str(&format!("- 问题: {}\n  解决: {}\n", s.problem, s.solution));
+            }
+        }
+
+        if !self.key_info.is_empty() {
+            content.push_str("### 关键信息\n");
+            for (k, v) in &self.key_info {
+                content.push_str(&format!("- {}: {}\n", k, v));
+            }
+        }
+
+        if !content.is_empty() {
+            global
+                .append(&format!("[{}] {}", task.id, task.title), &content)
+                .await?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Code change record

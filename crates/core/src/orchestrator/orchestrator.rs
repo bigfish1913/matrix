@@ -7,7 +7,8 @@ use crate::config::{MAX_DEPTH, MAX_RETRIES};
 use crate::error::{Error, Result};
 use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::memory::GlobalMemory;
-use crate::models::{Complexity, Task, TaskStatus};
+use crate::models::{Complexity, Task, TaskMemory, TaskStatus};
+use crate::memory::TaskMemoryExt;
 use crate::store::{QuestionStore, TaskStore};
 use crate::tui::event::{AnswerSender, QuestionSender};
 use crate::tui::topology::{generate_topology_file, TaskTopologyInfo};
@@ -1150,12 +1151,25 @@ OR if splitting needed:
             // Collect completed tasks
             while let Some(res) = join_set.try_join_next() {
                 match res {
-                    Ok((task_id, depth)) => {
+                    Ok((task_id, depth, completed_task)) => {
                         dispatched_ids.remove(&task_id);
                         if depth == 0 {
                             primary_running = primary_running.saturating_sub(1);
                         } else {
                             subtask_running = subtask_running.saturating_sub(1);
+                        }
+
+                        // Update memory on task completion
+                        if let Some(ref task) = completed_task {
+                            self.checkpoint.on_task_completed();
+                            self.update_task_memory(task).await;
+
+                            // Check if review is needed
+                            let completed = self.store.count(TaskStatus::Completed).await.unwrap_or(0);
+                            let total = self.store.total().await.unwrap_or(0);
+                            if self.checkpoint.should_review(completed, total) {
+                                self.show_review_report().await;
+                            }
                         }
                     }
                     Err(e) => {
@@ -1228,8 +1242,8 @@ OR if splitting needed:
                 let event_sender = self.config.event_sender.clone();
 
                 join_set.spawn(async move {
-                    let _ = run_task_pipeline(store, executor, task, event_sender).await;
-                    (task_id, 0usize)
+                    let result = run_task_pipeline(store, executor, task.clone(), event_sender).await;
+                    (task_id, 0usize, result.ok().flatten())
                 });
             }
 
@@ -1251,8 +1265,8 @@ OR if splitting needed:
                 let event_sender = self.config.event_sender.clone();
 
                 join_set.spawn(async move {
-                    let _ = run_task_pipeline(store, executor, task, event_sender).await;
-                    (task_id, 1usize)
+                    let result = run_task_pipeline(store, executor, task.clone(), event_sender).await;
+                    (task_id, 1usize, result.ok().flatten())
                 });
             }
 
@@ -1357,6 +1371,53 @@ OR if splitting needed:
 
         Ok(())
     }
+
+    /// Update task memory from execution result
+    async fn update_task_memory(&mut self, task: &Task) {
+        // Skip if task has no result or memory is already populated
+        if task.result.is_none() || !task.memory.is_empty() {
+            return;
+        }
+
+        // For now, create a simple memory entry from the task result
+        // In the future, this could use AI to extract structured memory
+        let mut memory = TaskMemory::default();
+
+        // Add learning from the task execution
+        if let Some(ref result) = task.result {
+            if result.len() < 1000 {
+                memory.learnings.push(format!("Task completed: {}", result));
+            }
+        }
+
+        // Add code changes from modified files
+        for file in &task.modified_files {
+            memory.code_changes.push(crate::models::CodeChange {
+                path: file.clone(),
+                description: format!("Modified during {}", task.title),
+            });
+        }
+
+        // Merge to global memory
+        if let Err(e) = memory.merge_to_global(&mut self.global_memory, task).await {
+            warn!(task_id = %task.id, error = %e, "Failed to merge task memory to global");
+        }
+
+        info!(task_id = %task.id, "Task memory updated");
+    }
+
+    /// Show progress review report
+    async fn show_review_report(&mut self) {
+        match self.checkpoint.generate_review().await {
+            Ok(report) => {
+                info!("\n{}", report.format());
+                self.emit_event(Event::ProgressReview { report });
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to generate review report");
+            }
+        }
+    }
 }
 
 /// Run single task pipeline
@@ -1365,8 +1426,12 @@ async fn run_task_pipeline(
     executor: Arc<TaskExecutor>,
     mut task: Task,
     event_sender: Option<EventSender>,
-) -> Result<()> {
+) -> Result<Option<Task>> {
     let thread_name = format!("thread-{}", task.id);
+
+    // Set started_at for stalled detection
+    task.started_at = Some(Utc::now());
+    store.save_task(&task).await?;
 
     // Emit InProgress status
     if let Some(ref sender) = event_sender {
@@ -1383,10 +1448,12 @@ async fn run_task_pipeline(
         if task.retries < MAX_RETRIES {
             task.retries += 1;
             task.status = TaskStatus::Pending;
+            task.started_at = None;
             store.save_task(&task).await?;
             warn!(task_id = %task.id, attempt = task.retries, "Retrying");
         } else {
             task.status = TaskStatus::Failed;
+            task.started_at = None;
             store.save_task(&task).await?;
             error!(task_id = %task.id, "Permanently failed");
             // Emit Failed status
@@ -1397,7 +1464,7 @@ async fn run_task_pipeline(
                 });
             }
         }
-        return Ok(());
+        return Ok(None);
     }
 
     // Test
@@ -1411,12 +1478,14 @@ async fn run_task_pipeline(
             task.retries += 1;
             task.status = TaskStatus::Pending;
             task.test_failure_context = Some(test_output);
+            task.started_at = None;
             store.save_task(&task).await?;
             warn!(task_id = %task.id, attempt = task.retries, "Tests failed, retrying");
-            return Ok(());
+            return Ok(None);
         } else if !fixed {
             task.status = TaskStatus::Failed;
             task.error = Some(format!("Tests failed: {}", test_output));
+            task.started_at = None;
             store.save_task(&task).await?;
             error!(task_id = %task.id, "Tests failed permanently");
             // Emit Failed status
@@ -1426,12 +1495,13 @@ async fn run_task_pipeline(
                     status: TaskStatus::Failed,
                 });
             }
-            return Ok(());
+            return Ok(None);
         }
     }
 
     // Mark completed
     task.status = TaskStatus::Completed;
+    task.started_at = None;
     store.save_task(&task).await?;
     info!(task_id = %task.id, "Task completed successfully");
 
@@ -1443,7 +1513,7 @@ async fn run_task_pipeline(
         });
     }
 
-    Ok(())
+    Ok(Some(task))
 }
 
 fn format_duration(d: Duration) -> String {
