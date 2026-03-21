@@ -62,6 +62,10 @@ struct Args {
     /// Verbose mode: detailed Claude output with debug logs
     #[arg(short, long)]
     verbose: bool,
+
+    /// Log file path (default: .matrix/matrix.log)
+    #[arg(long = "log-file", value_name = "FILE")]
+    log_file: Option<PathBuf>,
 }
 
 /// Determine verbosity level from CLI args
@@ -110,6 +114,9 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     };
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+    // Resolve workspace path first to determine log file location
+    let workspace = resolve_workspace(args)?;
+
     // Initialize terminal and wrap in guard for automatic restoration on panic/unwind
     let terminal = init_terminal()?;
     let terminal_guard = TerminalGuard::new(terminal);
@@ -117,7 +124,22 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     // Create event channel for orchestrator -> TUI communication
     let (event_sender, event_receiver) = create_event_channel();
 
-    // Initialize tracing with TuiLogLayer to send logs to TUI
+    // Setup log file: use provided path or default to .matrix/matrix.log
+    let log_file_path = args.log_file.clone()
+        .unwrap_or_else(|| workspace.join(".matrix").join("matrix.log"));
+
+    // Ensure parent directory exists
+    if let Some(parent) = log_file_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Create file appender
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file_path)?;
+
+    // Initialize tracing with both TuiLogLayer and file layer
     // Use INFO level by default, or respect MATRIX_LOG env var
     let log_filter = std::env::var("MATRIX_LOG")
         .unwrap_or_else(|_| "matrix=info".to_string());
@@ -126,7 +148,11 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
             tracing_subscriber::EnvFilter::new(log_filter),
         )
         .with(TuiLogLayer::new(event_sender.clone()))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(log_file)).with_ansi(false))
         .init();
+
+    // Log that logging has started
+    info!(log_file = %log_file_path.display(), "Logging initialized");
 
     // Create log buffer for shared logging
     let log_buffer = LogBuffer::new(1000);
@@ -139,8 +165,6 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
         .with_event_receiver(event_receiver)
         .with_log_buffer(log_buffer.clone());
 
-    // Resolve workspace path
-    let workspace = resolve_workspace(args)?;
     let tasks_dir = workspace.join(".matrix").join("tasks");
 
     // Load document content
@@ -300,9 +324,39 @@ async fn run_tui_loop(
 
 /// Run with simple output (no TUI)
 async fn run_simple(args: &Args) -> anyhow::Result<()> {
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
     // Resolve workspace path
     let workspace = resolve_workspace(args)?;
     let tasks_dir = workspace.join(".matrix").join("tasks");
+
+    // Setup log file: use provided path or default to .matrix/matrix.log
+    let log_file_path = args.log_file.clone()
+        .unwrap_or_else(|| workspace.join(".matrix").join("matrix.log"));
+
+    // Ensure parent directory exists
+    if let Some(parent) = log_file_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Create file appender
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file_path)?;
+
+    // Initialize tracing with both console and file output
+    let log_filter = std::env::var("MATRIX_LOG")
+        .unwrap_or_else(|_| "matrix=info".to_string());
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::new(log_filter),
+        )
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))  // Console output
+        .with(tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(log_file)).with_ansi(false))  // File output
+        .init();
+
+    info!(log_file = %log_file_path.display(), "Logging initialized");
 
     // Load document content
     let doc_content = if let Some(doc_path) = &args.doc {

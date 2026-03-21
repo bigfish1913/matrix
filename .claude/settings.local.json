@@ -10,7 +10,9 @@
       "Bash(done)",
       "Bash(cargo test:*)",
       "Bash(cargo install:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Skill(gsd:new-milestone)",
+      "Skill(gsd:new-milestone:*)"
     ]
   }
 }
