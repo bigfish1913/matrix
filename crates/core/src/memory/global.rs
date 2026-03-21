@@ -52,11 +52,11 @@ impl GlobalMemory {
         Ok(())
     }
 
-    /// For prompt (truncated to max_size)
+    /// For prompt (truncate to max size)
     pub fn for_prompt(&mut self, max_size: usize) -> String {
         let content = self.read();
         if content.len() > max_size {
-            format!("{}...\n[Truncated]", &content[..max_size])
+            format!("{}...\n[truncated]", &content[..max_size])
         } else {
             content.to_string()
         }
@@ -93,6 +93,6 @@ mod tests {
         memory.append("Section", "Content").await.unwrap();
 
         let truncated = memory.for_prompt(10);
-        assert!(truncated.contains("[Truncated]") || truncated.len() <= 20);
+        assert!(truncated.contains("[truncated]") || truncated.len() <= 20);
     }
 }
