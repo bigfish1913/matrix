@@ -6,4 +6,4 @@ mod task;
 
 pub use manifest::Manifest;
 pub use question::{Question, QuestionStatus};
-pub use task::{Complexity, Task, TaskStatus};
+pub use task::{CodeChange, Complexity, ProblemSolution, Task, TaskMemory, TaskStatus};

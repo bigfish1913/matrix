@@ -97,6 +97,12 @@ pub struct Task {
     /// Whether this is a clarification question task
     #[serde(default)]
     pub is_clarification: bool,
+    /// Task-level memory
+    #[serde(default)]
+    pub memory: TaskMemory,
+    /// Task start time (for detecting stalled tasks)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 impl Task {
@@ -123,6 +129,8 @@ impl Task {
             test_passed: false,
             modified_files: Vec::new(),
             is_clarification: false,
+            memory: TaskMemory::default(),
+            started_at: None,
         }
     }
 
@@ -137,8 +145,51 @@ impl Task {
         let mut task = Self::new(id, title, description);
         task.parent_id = Some(parent_id);
         task.depth = depth;
+        task.memory = TaskMemory::default();
+        task.started_at = None;
         task
     }
+}
+
+/// Task-level memory
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TaskMemory {
+    /// Lessons learned
+    #[serde(default)]
+    pub learnings: Vec<String>,
+    /// Code change records
+    #[serde(default)]
+    pub code_changes: Vec<CodeChange>,
+    /// Problem solutions
+    #[serde(default)]
+    pub solutions: Vec<ProblemSolution>,
+    /// Key information (API endpoints, config paths, etc.)
+    #[serde(default)]
+    pub key_info: HashMap<String, String>,
+}
+
+impl TaskMemory {
+    /// Check if memory is empty
+    pub fn is_empty(&self) -> bool {
+        self.learnings.is_empty()
+            && self.code_changes.is_empty()
+            && self.solutions.is_empty()
+            && self.key_info.is_empty()
+    }
+}
+
+/// Code change record
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeChange {
+    pub path: String,
+    pub description: String,
+}
+
+/// Problem solution record
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProblemSolution {
+    pub problem: String,
+    pub solution: String,
 }
 
 #[cfg(test)]
