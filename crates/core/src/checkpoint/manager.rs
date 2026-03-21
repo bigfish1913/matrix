@@ -10,8 +10,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
+use chrono::Utc;
 
-/// Blocked task info
+/// Blocked task
 #[derive(Debug, Clone)]
 pub struct BlockedTask {
     pub task_id: String,
@@ -25,9 +26,9 @@ pub struct CheckpointResult {
     pub warnings: Vec<String>,
     /// Tasks blocked by failed dependencies
     pub blocked: Vec<BlockedTask>,
-    /// Stalled tasks
+    /// Tasks stalled for too long
     pub stalled: Vec<String>,
-    /// Whether can proceed
+    /// Whether execution can proceed
     pub can_proceed: bool,
 }
 
@@ -37,11 +38,11 @@ pub struct CheckpointManager {
     config: CheckpointConfig,
     /// Tasks completed since last review
     tasks_since_review: usize,
-    /// Last review milestone (for percent mode)
+    /// Last review milestone (for percentage mode)
     last_review_at: usize,
     /// Last review time
     last_review_time: Option<Instant>,
-    /// Project start time (for ETA)
+    /// Project start time (for ETA calculation)
     start_time: Option<Instant>,
 }
 
@@ -62,22 +63,21 @@ impl CheckpointManager {
         self.start_time = Some(Instant::now());
     }
 
-    /// Called when task completes
+    /// Called when a task completes
     pub fn on_task_completed(&mut self) {
         self.tasks_since_review += 1;
     }
 
-    /// Check if should review based on config
-    /// Conditions: task count OR percent OR timeout
+    /// Determine if review is needed based on config
     pub fn should_review(&self, completed: usize, total: usize) -> bool {
-        // Condition 1: task interval
+        // Condition 1: Task count trigger
         if let Some(interval) = self.config.review_interval {
             if self.tasks_since_review >= interval {
                 return true;
             }
         }
 
-        // Condition 2: percent milestone
+        // Condition 2: Percentage trigger
         if let Some(percent) = self.config.review_percent {
             let threshold = (total as f64 * percent as f64 / 100.0) as usize;
             let milestone = completed / threshold.max(1);
@@ -86,7 +86,7 @@ impl CheckpointManager {
             }
         }
 
-        // Condition 3: timeout (minutes since last review)
+        // Condition 3: Time timeout trigger
         if let Some(timeout_mins) = self.config.review_timeout_mins {
             if let Some(last_time) = self.last_review_time {
                 let elapsed = last_time.elapsed();
@@ -99,7 +99,7 @@ impl CheckpointManager {
         false
     }
 
-    /// Called before each batch dispatch
+    /// Called before each batch of task scheduling
     pub async fn pre_batch_checkpoint(&mut self) -> Result<CheckpointResult> {
         let mut result = CheckpointResult::default();
 
@@ -107,10 +107,10 @@ impl CheckpointManager {
         let warnings = self.store.validate_dependencies().await;
         result.warnings = warnings;
 
-        // 2. Check blocked tasks (failed dependencies)
+        // 2. Check for blocked tasks (dependencies failed)
         result.blocked = self.find_blocked_tasks().await?;
 
-        // 3. Check stalled tasks (in_progress too long)
+        // 3. Check for stalled tasks (in_progress too long)
         result.stalled = self.find_stalled_tasks().await?;
 
         result.can_proceed = result.blocked.is_empty() || !self.config.validate_before_batch;
@@ -129,7 +129,7 @@ impl CheckpointManager {
             .map(|t| t.id.clone())
             .collect();
 
-        // Find pending tasks depending on failed tasks
+        // Find pending tasks that depend on failed tasks
         let blocked: Vec<BlockedTask> = tasks
             .iter()
             .filter(|t| t.status == TaskStatus::Pending)
@@ -148,8 +148,6 @@ impl CheckpointManager {
 
     /// Find stalled tasks (in_progress too long)
     async fn find_stalled_tasks(&self) -> Result<Vec<String>> {
-        use chrono::Utc;
-
         let tasks = self.store.all_tasks().await?;
         let threshold = Duration::from_secs(self.config.stalled_threshold_secs);
         let now = Utc::now();
@@ -174,8 +172,6 @@ impl CheckpointManager {
 
     /// Generate progress review
     pub async fn generate_review(&mut self) -> Result<ReviewReport> {
-        use chrono::Utc;
-
         self.tasks_since_review = 0;
         self.last_review_time = Some(Instant::now());
 
@@ -202,7 +198,7 @@ impl CheckpointManager {
             .map(|t| t.id.clone())
             .collect();
 
-        // Upcoming tasks (pending with all deps satisfied)
+        // Upcoming tasks (pending with dependencies satisfied)
         let upcoming: Vec<UpcomingTask> = tasks
             .iter()
             .filter(|t| t.status == TaskStatus::Pending)
@@ -305,12 +301,12 @@ mod tests {
 
         let mut manager = CheckpointManager::new(store, config);
 
-        // 2 tasks, should not review
+        // 2 tasks completed, should not review
         manager.on_task_completed();
         manager.on_task_completed();
         assert!(!manager.should_review(2, 10));
 
-        // 3 tasks, should review
+        // 3rd task completed, should review
         manager.on_task_completed();
         assert!(manager.should_review(3, 10));
     }
