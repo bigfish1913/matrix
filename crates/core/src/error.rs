@@ -19,6 +19,9 @@ pub enum Error {
     #[error("Task generation failed: {0}")]
     TaskGeneration(String),
 
+    #[error("Task execution failed: {0}")]
+    TaskExecution(String),
+
     #[error("Claude CLI error: {0}")]
     ClaudeCli(String),
 

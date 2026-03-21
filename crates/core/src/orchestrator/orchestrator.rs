@@ -1,15 +1,19 @@
 //! Orchestrator - main coordination engine.
 
 use crate::agent::SharedAgentPool;
+use crate::checkpoint::CheckpointManager;
+use crate::config::CheckpointConfig;
 use crate::config::{MAX_DEPTH, MAX_RETRIES};
 use crate::error::{Error, Result};
 use crate::executor::{ExecutorConfig, TaskExecutor};
+use crate::memory::GlobalMemory;
 use crate::models::{Complexity, Task, TaskStatus};
-use crate::store::TaskStore;
-use crate::tui::event::{AnswerSender, ClarificationSender};
+use crate::store::{QuestionStore, TaskStore};
+use crate::tui::event::{AnswerSender, QuestionSender};
 use crate::tui::topology::{generate_topology_file, TaskTopologyInfo};
 use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
-use std::collections::HashSet;
+use chrono::Utc;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -62,6 +66,16 @@ pub struct Orchestrator {
     start_time: Option<Instant>,
     /// Track last progress values to avoid duplicate log spam
     last_progress: (usize, usize, usize, usize), // (completed, pending, failed, total)
+    /// Question store for persistent question storage
+    question_store: Arc<QuestionStore>,
+    /// Event receiver for receiving responses from TUI
+    event_receiver: Option<crate::tui::EventReceiver>,
+    /// Pending question response channels (question_id -> sender)
+    pending_question_responses: HashMap<String, crate::tui::event::QuestionSender>,
+    /// Checkpoint manager for progress tracking
+    checkpoint: CheckpointManager,
+    /// Global memory for cross-task knowledge
+    global_memory: GlobalMemory,
 }
 
 impl Orchestrator {
@@ -75,6 +89,15 @@ impl Orchestrator {
         let store = Arc::new(TaskStore::new(config.tasks_dir.clone()).await?);
         let agent_pool = SharedAgentPool::new();
 
+        // Initialize QuestionStore in .matrix directory
+        let questions_dir = config.tasks_dir.parent()
+            .unwrap_or(&config.tasks_dir)
+            .join(".matrix");
+        let question_store = Arc::new(QuestionStore::new(questions_dir).await?);
+
+        // Create event channel for receiving responses from TUI
+        let (event_sender, event_receiver) = crate::tui::create_event_channel();
+
         let executor_config = ExecutorConfig {
             doc_content: config.doc_content.clone(),
             mcp_config: config.mcp_config.clone(),
@@ -87,15 +110,29 @@ impl Orchestrator {
             store.clone(),
             agent_pool.clone(),
             executor_config,
-        ).with_event_sender(config.event_sender.clone()));
+        ).with_event_sender(Some(event_sender.clone()))
+         .with_question_store(Arc::clone(&question_store)));
+
+        // Initialize checkpoint and memory systems
+        let checkpoint_config = CheckpointConfig::default();
+        let checkpoint = CheckpointManager::new(store.clone(), checkpoint_config);
+        let global_memory = GlobalMemory::new(&config.workspace);
 
         Ok(Self {
-            config,
+            config: OrchestratorConfig {
+                event_sender: Some(event_sender),
+                ..config
+            },
             store,
             agent_pool,
             executor,
             start_time: None,
             last_progress: (0, 0, 0, 0),
+            question_store,
+            event_receiver: Some(event_receiver),
+            pending_question_responses: HashMap::new(),
+            checkpoint,
+            global_memory,
         })
     }
 
@@ -103,6 +140,77 @@ impl Orchestrator {
     fn emit_event(&self, event: Event) {
         if let Some(ref sender) = self.config.event_sender {
             let _ = sender.send(event);
+        }
+    }
+
+    /// Poll events from TUI (question responses, etc.)
+    async fn poll_events(&mut self) {
+        // Collect all pending events first to avoid borrow issues
+        let mut events = Vec::new();
+        if let Some(ref mut receiver) = self.event_receiver {
+            while let Ok(event) = receiver.try_recv() {
+                events.push(event);
+            }
+        }
+
+        // Process events (no mutable borrow issues here)
+        for event in events {
+            match event {
+                Event::AgentQuestion { task_id, question, response_tx } => {
+                    // Clone needed data before moving
+                    let question_id = question.id.clone();
+                    let task_id_for_log = question.task_id.clone();
+
+                    // Store the question persistently
+                    if let Err(e) = self.question_store.create(&question).await {
+                        error!(question_id = %question_id, error = %e, "Failed to store question");
+                    }
+
+                    // Store the response channel for later
+                    self.pending_question_responses.insert(question_id.clone(), response_tx);
+
+                    // Emit event to TUI to display (TUI will answer via QuestionAnswered event)
+                    if let Some(ref sender) = self.config.event_sender {
+                        let _ = sender.send(Event::AgentQuestion {
+                            task_id,
+                            question,
+                            response_tx: QuestionSender::new(tokio::sync::oneshot::channel().0),
+                        });
+                    }
+
+                    info!(question_id = %question_id, task_id = %task_id_for_log, "Question received from task");
+                }
+                Event::QuestionAnswered { question_id, answer } => {
+                    // Update store
+                    if let Err(e) = self.question_store.answer(&question_id, &answer).await {
+                        warn!(question_id = %question_id, error = %e, "Failed to record answer");
+                    }
+
+                    // Send response to waiting task executor
+                    if let Some(sender) = self.pending_question_responses.remove(&question_id) {
+                        if let Err(e) = sender.send(answer.clone()) {
+                            warn!(question_id = %question_id, error = %e, "Failed to send answer to task");
+                        } else {
+                            info!(question_id = %question_id, answer = %answer, "Answer sent to task");
+                        }
+                    }
+                }
+                Event::QuestionAutoDecided { question_id, decision, reason } => {
+                    // Update store
+                    if let Err(e) = self.question_store.record_auto_decision(
+                        &question_id,
+                        &decision,
+                        &reason,
+                    ).await {
+                        warn!(question_id = %question_id, error = %e, "Failed to record auto-decision");
+                    }
+
+                    info!(question_id = %question_id, decision = %decision, "Auto-decision recorded");
+                }
+                _ => {
+                    // Ignore other events (we're the sender for those)
+                }
+            }
         }
     }
 
@@ -137,10 +245,20 @@ impl Orchestrator {
     /// Run the orchestrator
     pub async fn run(&mut self) -> Result<()> {
         self.start_time = Some(Instant::now());
+        self.checkpoint.set_start_time();
         self.print_header();
 
         // Ensure .gitignore exists
         self.ensure_gitignore().await?;
+
+        // Load any pending questions from previous run (for info only)
+        let pending = self.question_store.pending_questions().await?;
+        if !pending.is_empty() {
+            info!("Found {} pending questions from previous run", pending.len());
+            for q in &pending {
+                info!(question_id = %q.id, task_id = %q.task_id, question = %q.question, "Pending question");
+            }
+        }
 
         // Phase 0: Check for existing tasks FIRST
         let total = self.store.total().await?;
@@ -1026,6 +1144,9 @@ OR if splitting needed:
         let mut subtask_running = 0usize;
 
         while Instant::now() < deadline {
+            // Process events from TUI (question responses, etc.)
+            self.poll_events().await;
+
             // Collect completed tasks
             while let Some(res) = join_set.try_join_next() {
                 match res {

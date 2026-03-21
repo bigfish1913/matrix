@@ -1,6 +1,7 @@
 //! TUI Event handling.
 
-use crate::models::TaskStatus;
+use crate::checkpoint::ReviewReport;
+use crate::models::{Question, TaskStatus};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -170,6 +171,30 @@ impl Clone for ClarificationSender {
     }
 }
 
+/// Channel sender for waiting on question response
+#[derive(Debug)]
+pub struct QuestionSender(Arc<Mutex<Option<tokio::sync::oneshot::Sender<String>>>>);
+
+impl QuestionSender {
+    pub fn new(sender: tokio::sync::oneshot::Sender<String>) -> Self {
+        Self(Arc::new(Mutex::new(Some(sender))))
+    }
+
+    pub fn send(self, answer: String) -> Result<(), String> {
+        if let Some(sender) = self.0.lock().unwrap().take() {
+            sender.send(answer).map_err(|e| e.to_string())
+        } else {
+            Err("Question already answered".to_string())
+        }
+    }
+}
+
+impl Clone for QuestionSender {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
 /// Events emitted by orchestrator for TUI consumption
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -277,6 +302,32 @@ pub enum Event {
     ActivityPulse {
         task_id: String,
         activity: Activity,
+    },
+
+    // Progress review
+    ProgressReview {
+        report: ReviewReport,
+    },
+
+    // Agent Q&A events
+    /// Agent asks a question (blocking pauses task until answered)
+    AgentQuestion {
+        task_id: String,
+        question: Question,
+        response_tx: QuestionSender,
+    },
+
+    /// User answered a question (from TUI)
+    QuestionAnswered {
+        question_id: String,
+        answer: String,
+    },
+
+    /// Agent auto-decided on non-blocking question
+    QuestionAutoDecided {
+        question_id: String,
+        decision: String,
+        reason: String,
     },
 }
 

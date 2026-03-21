@@ -133,11 +133,11 @@ impl CheckpointManager {
         let blocked: Vec<BlockedTask> = tasks
             .iter()
             .filter(|t| t.status == TaskStatus::Pending)
-            .filter(|t| t.depends_on.iter().any(|d| failed_ids.contains(d)))
+            .filter(|t| t.depends_on.iter().any(|d| failed_ids.contains(d.as_str())))
             .map(|t| BlockedTask {
                 task_id: t.id.clone(),
                 blocked_by: t.depends_on.iter()
-                    .filter(|d| failed_ids.contains(d))
+                    .filter(|d| failed_ids.contains(d.as_str()))
                     .cloned()
                     .collect(),
             })

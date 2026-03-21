@@ -2,7 +2,7 @@
 
 use crate::models::TaskStatus;
 use crate::tui::app::{OutputLine, Tab, TaskDisplay, TuiApp};
-use crate::tui::components::{LogsPanel, OutputPanel, StatusBar, TabSwitcher, TasksPanel};
+use crate::tui::components::{LogsPanel, OutputPanel, QuestionsPanel, StatusBar, TabSwitcher, TasksPanel};
 use crate::tui::markdown::render_markdown;
 use ratatui::{
     backend::CrosstermBackend,
@@ -74,6 +74,10 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
             if let Some(task_id) = &app.output_task_id {
                 render_output_task_indicator(frame, task_id, app.tasks.len());
             }
+        }
+        Tab::Questions => {
+            // Render the questions panel
+            app.questions_panel.render(frame, chunks[1], &app.questions);
         }
     }
 

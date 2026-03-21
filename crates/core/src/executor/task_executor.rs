@@ -4,10 +4,10 @@ use crate::agent::{ClaudeRunner, SharedAgentPool};
 use crate::config::{Model, MAX_PROMPT_LENGTH, MAX_WORKSPACE_FILES, TIMEOUT_EXEC};
 use crate::detector::ProjectDetector;
 use crate::detector::TestRunnerDetector;
-use crate::error::Result;
-use crate::models::{Task, TaskStatus};
-use crate::store::TaskStore;
-use crate::tui::{Event, EventSender, ExecutionState, Activity};
+use crate::error::{Error, Result};
+use crate::models::{Question, Task, TaskStatus};
+use crate::store::{QuestionStore, TaskStore};
+use crate::tui::{Event, EventSender, ExecutionState, Activity, QuestionSender};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +15,18 @@ use std::time::SystemTime;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::{info, warn};
+
+/// Parsed question data from agent output
+#[derive(Debug, Clone)]
+pub struct QuestionData {
+    pub question: String,
+    pub options: Vec<String>,
+    pub pros: Vec<String>,
+    pub cons: Vec<String>,
+    pub recommended: Option<usize>,
+    pub recommendation_reason: Option<String>,
+    pub blocking: bool,
+}
 
 /// Executor configuration
 #[derive(Debug, Clone)]
@@ -47,6 +59,7 @@ pub struct TaskExecutor {
     config: ExecutorConfig,
     setup_done: bool,
     event_sender: Option<EventSender>,
+    question_store: Option<Arc<QuestionStore>>,
 }
 
 impl TaskExecutor {
@@ -67,12 +80,19 @@ impl TaskExecutor {
             config,
             setup_done: false,
             event_sender: None,
+            question_store: None,
         }
     }
 
     /// Set the event sender for TUI updates
     pub fn with_event_sender(mut self, sender: Option<EventSender>) -> Self {
         self.event_sender = sender;
+        self
+    }
+
+    /// Set the question store for question persistence
+    pub fn with_question_store(mut self, store: Arc<QuestionStore>) -> Self {
+        self.question_store = Some(store);
         self
     }
 
@@ -559,6 +579,196 @@ Implement the task now. Work directly in the workspace directory."#,
             })
             .map(|(path, _)| path.clone())
             .collect()
+    }
+
+    /// Ask a question during task execution
+    ///
+    /// # Arguments
+    /// * `task_id` - ID of the task asking the question
+    /// * `question` - The question text
+    /// * `options` - Multiple choice options
+    /// * `pros` - Pros for each option
+    /// * `cons` - Cons for each option
+    /// * `recommended` - Index of recommended option
+    /// * `recommendation_reason` - Why this option is recommended
+    /// * `blocking` - If true, waits for user answer; if false, auto-decides
+    ///
+    /// # Returns
+    /// The selected option (or auto-decision if non-blocking)
+    pub async fn ask_question(
+        &self,
+        task_id: &str,
+        question: &str,
+        options: &[String],
+        pros: &[String],
+        cons: &[String],
+        recommended: Option<usize>,
+        recommendation_reason: Option<&str>,
+        blocking: bool,
+    ) -> Result<String> {
+        // Validate options
+        if options.is_empty() {
+            return Err(Error::TaskExecution("No options provided for question".to_string()));
+        }
+
+        let question_model = Question::new(
+            task_id.to_string(),
+            question.to_string(),
+            options.to_vec(),
+            pros.to_vec(),
+            cons.to_vec(),
+            recommended,
+            recommendation_reason.map(|s| s.to_string()),
+            blocking,
+        );
+
+        // Save to store
+        if let Some(ref store) = self.question_store {
+            store.create(&question_model).await?;
+        }
+
+        if blocking {
+            // Create oneshot channel for response
+            let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+            let question_sender = QuestionSender::new(tx);
+
+            // Send event to TUI
+            if let Some(ref sender) = self.event_sender {
+                let _ = sender.send(Event::AgentQuestion {
+                    task_id: task_id.to_string(),
+                    question: question_model.clone(),
+                    response_tx: question_sender,
+                });
+            }
+
+            // Wait for answer
+            match rx.await {
+                Ok(answer) => {
+                    // Record answer
+                    if let Some(ref store) = self.question_store {
+                        store.answer(&question_model.id, &answer).await?;
+                    }
+                    Ok(answer)
+                }
+                Err(_) => Err(Error::TaskExecution("Question channel closed".to_string())),
+            }
+        } else {
+            // Non-blocking: auto-decide with recommended option
+            let decision = recommended
+                .and_then(|i| options.get(i))
+                .cloned()
+                .unwrap_or_else(|| options.first().cloned().unwrap_or_default());
+
+            let reason = recommendation_reason
+                .unwrap_or("Auto-decided (non-blocking)");
+
+            // Record auto-decision
+            if let Some(ref store) = self.question_store {
+                store.record_auto_decision(&question_model.id, &decision, reason).await?;
+            }
+
+            // Send event for UI update
+            if let Some(ref sender) = self.event_sender {
+                let _ = sender.send(Event::QuestionAutoDecided {
+                    question_id: question_model.id.clone(),
+                    decision: decision.clone(),
+                    reason: reason.to_string(),
+                });
+            }
+
+            Ok(decision)
+        }
+    }
+
+    /// Parse QUESTION markers from agent output
+    /// Looks for JSON format: QUESTION: {"question": "...", "options": [...], ...}
+    /// Or structured format with QUESTION: prefix
+    pub fn parse_question_from_output(output: &str) -> Option<QuestionData> {
+        // Try JSON format first: QUESTION: {"question": "...", "options": [...]}
+        if let Some(json_start) = output.find("QUESTION: {") {
+            let json_part = &output[json_start + 9..]; // Skip "QUESTION: "
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_part) {
+                return Self::extract_question_data(&json);
+            }
+        }
+
+        // Try to find standalone JSON with question fields
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('{') {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if json.get("question").is_some() && json.get("options").is_some() {
+                        return Self::extract_question_data(&json);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Extract QuestionData from JSON value
+    fn extract_question_data(json: &serde_json::Value) -> Option<QuestionData> {
+        let question = json.get("question")?.as_str()?.to_string();
+
+        let options = json.get("options")?
+            .as_array()?
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect::<Vec<_>>();
+
+        if options.is_empty() {
+            return None;
+        }
+
+        let pros = json.get("pros")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        let cons = json.get("cons")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        let recommended = json.get("recommended")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+
+        let recommendation_reason = json.get("recommendation_reason")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let blocking = json.get("blocking")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        Some(QuestionData {
+            question,
+            options,
+            pros,
+            cons,
+            recommended,
+            recommendation_reason,
+            blocking,
+        })
+    }
+
+    /// Process agent output to check for embedded questions
+    pub async fn process_output_for_questions(&self, task_id: &str, output: &str) -> Result<()> {
+        if let Some(question_data) = Self::parse_question_from_output(output) {
+            self.ask_question(
+                task_id,
+                &question_data.question,
+                &question_data.options,
+                &question_data.pros,
+                &question_data.cons,
+                question_data.recommended,
+                question_data.recommendation_reason.as_deref(),
+                question_data.blocking,
+            ).await?;
+        }
+        Ok(())
     }
 }
 

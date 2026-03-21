@@ -1,10 +1,11 @@
 //! TUI Application state and main loop.
 
-use crate::models::TaskStatus;
+use crate::models::{Question, QuestionStatus, TaskStatus};
 use crate::tui::{
     Activity, ClarificationQuestion, ClarificationSender, ConfirmSender, Event, EventReceiver,
-    ExecutionState, Key, LogBuffer, LogContext, VerbosityLevel,
+    ExecutionState, Key, LogBuffer, LogContext, LogLevel, QuestionSender, VerbosityLevel,
 };
+use crate::tui::components::QuestionsPanel;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -106,6 +107,26 @@ impl ClarificationTaskState {
     }
 }
 
+/// State for agent question dialog
+#[derive(Debug, Default)]
+pub struct AgentQuestionState {
+    pub task_id: Option<String>,
+    pub question: Option<crate::models::Question>,
+    pub response_tx: Option<crate::tui::event::QuestionSender>,
+}
+
+impl AgentQuestionState {
+    pub fn is_active(&self) -> bool {
+        self.response_tx.is_some()
+    }
+
+    pub fn finish(&mut self) {
+        self.response_tx = None;
+        self.task_id = None;
+        self.question = None;
+    }
+}
+
 /// State for clarification questions dialog (multiple choice)
 #[derive(Debug, Default)]
 pub struct ClarificationState {
@@ -156,6 +177,7 @@ pub enum Tab {
     Logs,
     Tasks,
     Output,
+    Questions,
 }
 
 impl Tab {
@@ -163,15 +185,17 @@ impl Tab {
         match self {
             Self::Logs => Self::Tasks,
             Self::Tasks => Self::Output,
-            Self::Output => Self::Logs,
+            Self::Output => Self::Questions,
+            Self::Questions => Self::Logs,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Logs => Self::Output,
+            Self::Logs => Self::Questions,
             Self::Tasks => Self::Logs,
             Self::Output => Self::Tasks,
+            Self::Questions => Self::Output,
         }
     }
 }
@@ -268,6 +292,11 @@ pub struct TuiApp {
     pub logs_scroll: u16,
     pub logs_auto_follow: bool, // Auto-scroll to bottom on new logs
 
+    // Questions tab
+    pub questions: Vec<Question>,
+    pub questions_panel: QuestionsPanel,
+    pub questions_scroll: usize,
+
     // Verbosity
     pub verbosity: VerbosityLevel,
 
@@ -285,6 +314,9 @@ pub struct TuiApp {
 
     // Clarification task (when Claude generates a question task)
     pub clarification_task: ClarificationTaskState,
+
+    // Agent question dialog
+    pub agent_question: AgentQuestionState,
 
     // Quit confirmation
     pub quit_confirm: QuitConfirmState,
@@ -325,12 +357,16 @@ impl TuiApp {
             log_buffer: LogBuffer::default(),
             logs_scroll: 0,
             logs_auto_follow: true,
+            questions: Vec::new(),
+            questions_panel: QuestionsPanel::new(),
+            questions_scroll: 0,
             verbosity,
             event_receiver: None,
             show_help: false,
             clarification: ClarificationState::default(),
             resume_confirm: ResumeConfirmState::default(),
             clarification_task: ClarificationTaskState::default(),
+            agent_question: AgentQuestionState::default(),
             quit_confirm: QuitConfirmState::default(),
             running: true,
         }
@@ -367,6 +403,12 @@ impl TuiApp {
         filtered
             .get(self.tasks_scroll.min(filtered.len().saturating_sub(1)))
             .copied()
+    }
+
+    /// Get selected question (from questions_panel state)
+    pub fn selected_question(&self) -> Option<&Question> {
+        let selected = self.questions_panel.state.selected()?;
+        self.questions.get(selected)
     }
 
     /// Switch output view to specific task
@@ -450,6 +492,12 @@ impl TuiApp {
             return;
         }
 
+        // Handle question answer dialog
+        if self.questions_panel.in_answer_dialog {
+            self.handle_question_answer_key(key);
+            return;
+        }
+
         // Handle quit confirmation
         if self.quit_confirm.is_active() {
             self.handle_quit_confirm_key(key);
@@ -502,6 +550,13 @@ impl TuiApp {
                     if let Some(task) = self.selected_task() {
                         self.task_detail.task_id = Some(task.id.clone());
                     }
+                } else if self.current_tab == Tab::Questions {
+                    if let Some(question) = self.selected_question() {
+                        if question.status == QuestionStatus::Pending {
+                            self.questions_panel.in_answer_dialog = true;
+                            self.questions_panel.dialog_selection = 0;
+                        }
+                    }
                 }
             }
             Key::Char('a') => {
@@ -549,6 +604,67 @@ impl TuiApp {
         match key {
             Key::Esc | Key::Char('q') | Key::Enter => {
                 self.task_detail.close();
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle question answer dialog keys
+    fn handle_question_answer_key(&mut self, key: Key) {
+        let Some(selected) = self.questions_panel.state.selected() else {
+            return;
+        };
+        let Some(question) = self.questions.get(selected).cloned() else {
+            return;
+        };
+
+        match key {
+            Key::Char('q') | Key::Esc => {
+                // Cancel dialog
+                self.questions_panel.in_answer_dialog = false;
+                self.questions_panel.dialog_selection = 0;
+            }
+            Key::Char('j') | Key::Down => {
+                let total = self.questions_panel.total_options(&question);
+                self.questions_panel.dialog_selection =
+                    (self.questions_panel.dialog_selection + 1) % total;
+            }
+            Key::Char('k') | Key::Up => {
+                let total = self.questions_panel.total_options(&question);
+                if self.questions_panel.dialog_selection == 0 {
+                    self.questions_panel.dialog_selection = total - 1;
+                } else {
+                    self.questions_panel.dialog_selection -= 1;
+                }
+            }
+            Key::Char(c) if c.is_ascii_digit() => {
+                let num = c.to_digit(10).unwrap_or(0) as usize;
+                let total = self.questions_panel.total_options(&question);
+                if num > 0 && num <= total {
+                    self.questions_panel.dialog_selection = num - 1;
+                }
+            }
+            Key::Enter | Key::Char(' ') => {
+                // Submit answer - store for orchestrator to pick up
+                let answer = if self.questions_panel.is_other_selected(&question) {
+                    self.questions_panel.custom_input.clone()
+                } else {
+                    question
+                        .options
+                        .get(self.questions_panel.dialog_selection)
+                        .cloned()
+                        .unwrap_or_default()
+                };
+
+                // Mark question as having pending answer
+                if let Some(q) = self.questions.get_mut(selected) {
+                    // Store the pending answer - orchestrator will process it
+                    q.answer = Some(answer);
+                }
+
+                self.questions_panel.in_answer_dialog = false;
+                self.questions_panel.custom_input.clear();
+                self.questions_panel.dialog_selection = 0;
             }
             _ => {}
         }
@@ -630,6 +746,17 @@ impl TuiApp {
                     if self.output_scroll >= max_scroll.saturating_sub(5) {
                         self.output_auto_follow = true;
                     }
+                }
+            }
+            Tab::Questions => {
+                if delta > 0 {
+                    self.questions_scroll = self.questions_scroll.saturating_sub(delta as usize);
+                    self.questions_panel.select_up(self.questions.len());
+                } else {
+                    let delta_abs = (-delta) as usize;
+                    let max_scroll = self.questions.len().saturating_sub(1);
+                    self.questions_scroll = (self.questions_scroll + delta_abs).min(max_scroll);
+                    self.questions_panel.select_down(self.questions.len());
                 }
             }
         }
@@ -861,6 +988,10 @@ impl TuiApp {
             Tab::Logs => {
                 self.logs_scroll = 0;
             }
+            Tab::Questions => {
+                self.questions_scroll = 0;
+                self.questions_panel.state.select(Some(0));
+            }
         }
     }
 
@@ -878,6 +1009,12 @@ impl TuiApp {
             Tab::Logs => {
                 self.logs_scroll = self.logs_scroll.saturating_sub(1);
                 self.logs_auto_follow = false;
+            }
+            Tab::Questions => {
+                if self.questions_scroll > 0 {
+                    self.questions_scroll -= 1;
+                    self.questions_panel.select_up(self.questions.len());
+                }
             }
         }
     }
@@ -909,6 +1046,12 @@ impl TuiApp {
                 // This prevents "jump to top" when content is short
                 if max_scroll > 15 && self.logs_scroll >= max_scroll.saturating_sub(5) {
                     self.logs_auto_follow = true;
+                }
+            }
+            Tab::Questions => {
+                if self.questions_scroll < self.questions.len().saturating_sub(1) {
+                    self.questions_scroll += 1;
+                    self.questions_panel.select_down(self.questions.len());
                 }
             }
         }
@@ -1131,6 +1274,58 @@ impl TuiApp {
                     self.current_task_id = Some(task_id);
                 }
             }
+            Event::ProgressReview { report } => {
+                // Log progress review to logs panel
+                for line in report.format().lines() {
+                    self.log_buffer.push(
+                        LogLevel::Info,
+                        line.to_string(),
+                        LogContext::default(),
+                    );
+                }
+            }
+            Event::AgentQuestion { task_id, question, response_tx } => {
+                // Add question to our tracking list if not already present
+                let question_found = self.questions.iter().any(|q| q.id == question.id);
+                if !question_found {
+                    self.questions.push(question.clone());
+                }
+                // Store question for TUI display and response handling
+                self.agent_question.task_id = Some(task_id);
+                self.agent_question.question = Some(question);
+                self.agent_question.response_tx = Some(response_tx);
+            }
+            Event::QuestionAnswered { question_id, answer } => {
+                // Log that a question was answered
+                self.log_buffer.push(
+                    LogLevel::Info,
+                    format!("Question {} answered: {}", question_id, answer),
+                    LogContext::default(),
+                );
+                // Update the question in our list
+                if let Some(q) = self.questions.iter_mut().find(|q| q.id == question_id) {
+                    use crate::models::QuestionStatus;
+                    q.status = QuestionStatus::Answered;
+                    q.answer = Some(answer);
+                    q.answered_at = Some(chrono::Utc::now());
+                }
+            }
+            Event::QuestionAutoDecided { question_id, decision, reason } => {
+                // Log that an agent auto-decided on a non-blocking question
+                self.log_buffer.push(
+                    LogLevel::Info,
+                    format!("Question {} auto-decided: {} ({})", question_id, decision, reason),
+                    LogContext::default(),
+                );
+                // Update the question in our list
+                if let Some(q) = self.questions.iter_mut().find(|q| q.id == question_id) {
+                    use crate::models::QuestionStatus;
+                    q.status = QuestionStatus::AutoDecided;
+                    q.answer = Some(decision);
+                    q.decision_log = Some(reason);
+                    q.answered_at = Some(chrono::Utc::now());
+                }
+            }
         }
     }
 
@@ -1178,11 +1373,13 @@ mod tests {
     fn test_tab_navigation() {
         assert_eq!(Tab::Logs.next(), Tab::Tasks);
         assert_eq!(Tab::Tasks.next(), Tab::Output);
-        assert_eq!(Tab::Output.next(), Tab::Logs);
+        assert_eq!(Tab::Output.next(), Tab::Questions);
+        assert_eq!(Tab::Questions.next(), Tab::Logs);
 
-        assert_eq!(Tab::Logs.prev(), Tab::Output);
+        assert_eq!(Tab::Logs.prev(), Tab::Questions);
         assert_eq!(Tab::Tasks.prev(), Tab::Logs);
         assert_eq!(Tab::Output.prev(), Tab::Tasks);
+        assert_eq!(Tab::Questions.prev(), Tab::Output);
     }
 
     #[test]
