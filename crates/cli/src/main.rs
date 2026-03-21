@@ -230,9 +230,9 @@ async fn run_tui_loop(
             // TUI keyboard/tick events
             Some(event) = events.next() => {
                 match event {
-                    TuiEvent::Key(key) => {
-                        app.handle_key(key);
-                        // Redraw immediately on key press
+                    TuiEvent::Key(_) | TuiEvent::MouseScroll { .. } => {
+                        app.handle_tui_event(event);
+                        // Redraw immediately on input
                         let _ = terminal.draw(|frame| {
                             render_app(frame, app);
                         });

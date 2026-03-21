@@ -2,7 +2,7 @@
 
 use crate::error::{Error, Result};
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers},
+    event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -132,25 +132,35 @@ pub fn event_stream() -> impl Stream<Item = TuiEvent> {
                 } => {
                     match result {
                         Ok(Some(Ok(event))) => {
-                            if let Event::Key(key) = event {
-                                // Handle Ctrl+C to quit
-                                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                                    yield TuiEvent::Key(Key::Char('q'));
-                                    continue;
-                                }
-
-                                // Debounce
-                                let now = std::time::Instant::now();
-                                if let Some((last_code, last_time)) = last_key {
-                                    if last_code == key.code && now.duration_since(last_time) < key_repeat_delay {
+                            match event {
+                                Event::Key(key) => {
+                                    // Handle Ctrl+C to quit
+                                    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                                        yield TuiEvent::Key(Key::Char('q'));
                                         continue;
                                     }
-                                }
-                                last_key = Some((key.code, now));
 
-                                if let Some(k) = keycode_to_key(key.code, key.modifiers) {
-                                    yield TuiEvent::Key(k);
+                                    // Debounce
+                                    let now = std::time::Instant::now();
+                                    if let Some((last_code, last_time)) = last_key {
+                                        if last_code == key.code && now.duration_since(last_time) < key_repeat_delay {
+                                            continue;
+                                        }
+                                    }
+                                    last_key = Some((key.code, now));
+
+                                    if let Some(k) = keycode_to_key(key.code, key.modifiers) {
+                                        yield TuiEvent::Key(k);
+                                    }
                                 }
+                                Event::Mouse(mouse) => {
+                                    if let MouseEventKind::ScrollUp = mouse.kind {
+                                        yield TuiEvent::MouseScroll { delta: 3 };
+                                    } else if let MouseEventKind::ScrollDown = mouse.kind {
+                                        yield TuiEvent::MouseScroll { delta: -3 };
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         _ => {} // Timeout or error, continue

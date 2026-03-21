@@ -38,7 +38,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
             let viewport_height = chunks[1].height.saturating_sub(2);
             // When auto-follow is on, scroll to show latest entries
             let scroll = if app.logs_auto_follow {
-                entries.len() as u16
+                LogsPanel::calculate_auto_scroll(entries.len(), viewport_height)
             } else {
                 app.logs_scroll
             };
