@@ -12,10 +12,6 @@ use std::time::{Duration, Instant};
 const SPINNER_FRAMES: &[&str] = &["⠋ ", "⠙ ", "⠚ ", "⠞ ", "⠟ "];
 /// Pulse indicator frames
 const PULSE_FRAMES: &[&str] = &["●", "○"];
-/// Warning threshold in seconds
-const WARNING_THRESHOLD_SECS: u64 = 30;
-/// Pulse threshold in seconds (switch from spinner to pulse)
-const PULSE_THRESHOLD_SECS: u64 = 2;
 
 /// Status bar component
 pub struct StatusBar;
@@ -37,7 +33,7 @@ impl StatusBar {
         version: &str,
         current_task_tokens: u32,
         total_tokens: u32,
-        last_pulse_time: Option<&Instant>,
+        _last_pulse_time: Option<&Instant>,
     ) -> Paragraph<'static> {
         let state_color = match state {
             ExecutionState::Idle => Color::Gray,
@@ -70,20 +66,9 @@ impl StatusBar {
 
         // Calculate pulse indicator based on time since last activity
         let pulse_indicator = if matches!(state, ExecutionState::Running { .. }) {
-            let elapsed_secs = last_pulse_time
-                .map(|t| t.elapsed().as_secs())
-                .unwrap_or(u64::MAX);
-
-            if elapsed_secs > WARNING_THRESHOLD_SECS {
-                " ⚠".to_string()
-            } else if elapsed_secs > PULSE_THRESHOLD_SECS {
-                // Pulsing indicator
-                let frame = PULSE_FRAMES[spinner_frame % PULSE_FRAMES.len()];
-                format!(" {}", frame)
-            } else {
-                // Still in active spinner phase
-                String::new()
-            }
+            // Always show pulse indicator when in Running state
+            let frame = PULSE_FRAMES[spinner_frame % PULSE_FRAMES.len()];
+            format!(" {}", frame)
         } else {
             String::new()
         };
