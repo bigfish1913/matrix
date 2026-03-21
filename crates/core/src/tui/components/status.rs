@@ -36,16 +36,18 @@ impl StatusBar {
             ExecutionState::Idle => Color::Gray,
             ExecutionState::Clarifying => Color::Magenta,
             ExecutionState::Generating => Color::Cyan,
-            ExecutionState::Running => Color::Yellow,
+            ExecutionState::Running { .. } => Color::Yellow,
             ExecutionState::Completed => Color::Green,
             ExecutionState::Failed => Color::Red,
         };
 
         // Get spinner character based on state and frame
-        let spinner = if state == ExecutionState::Generating
-            || state == ExecutionState::Clarifying
-            || state == ExecutionState::Running
-        {
+        let spinner = if matches!(
+            state,
+            ExecutionState::Generating
+                | ExecutionState::Clarifying
+                | ExecutionState::Running { .. }
+        ) {
             SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()]
         } else {
             ""

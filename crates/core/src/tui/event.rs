@@ -16,6 +16,33 @@ pub enum VerbosityLevel {
     Verbose,
 }
 
+/// Activity type for granular status display
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Activity {
+    #[default]
+    ApiCall,
+    FileWrite,
+    Test,
+    Planning,
+    Assessing,
+    Git,
+    Other(&'static str),
+}
+
+impl std::fmt::Display for Activity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ApiCall => write!(f, "api"),
+            Self::FileWrite => write!(f, "file"),
+            Self::Test => write!(f, "test"),
+            Self::Planning => write!(f, "plan"),
+            Self::Assessing => write!(f, "assess"),
+            Self::Git => write!(f, "git"),
+            Self::Other(s) => write!(f, "{}", s),
+        }
+    }
+}
+
 /// Execution state for status bar
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ExecutionState {
@@ -23,7 +50,7 @@ pub enum ExecutionState {
     Idle,
     Clarifying,
     Generating,
-    Running,
+    Running { activity: Activity },
     Completed,
     Failed,
 }
@@ -34,7 +61,7 @@ impl std::fmt::Display for ExecutionState {
             Self::Idle => write!(f, "Idle"),
             Self::Clarifying => write!(f, "Clarifying"),
             Self::Generating => write!(f, "Generating"),
-            Self::Running => write!(f, "Running"),
+            Self::Running { activity } => write!(f, "Running:{}", activity),
             Self::Completed => write!(f, "Completed"),
             Self::Failed => write!(f, "Failed"),
         }
@@ -286,6 +313,7 @@ pub enum Key {
 #[derive(Debug, Clone)]
 pub enum TuiEvent {
     Key(Key),
+    MouseScroll { delta: i16 }, // Positive = scroll up, Negative = scroll down
     Resize(u16, u16),
     Orchestrator(Event),
     Tick,
@@ -302,7 +330,21 @@ mod tests {
 
     #[test]
     fn test_execution_state_display() {
-        assert_eq!(ExecutionState::Running.to_string(), "Running");
+        assert_eq!(
+            ExecutionState::Running { activity: Activity::ApiCall }.to_string(),
+            "Running:api"
+        );
+    }
+
+    #[test]
+    fn test_activity_display() {
+        assert_eq!(Activity::ApiCall.to_string(), "api");
+        assert_eq!(Activity::FileWrite.to_string(), "file");
+        assert_eq!(Activity::Test.to_string(), "test");
+        assert_eq!(Activity::Planning.to_string(), "plan");
+        assert_eq!(Activity::Assessing.to_string(), "assess");
+        assert_eq!(Activity::Git.to_string(), "git");
+        assert_eq!(Activity::Other("custom").to_string(), "custom");
     }
 
     #[test]

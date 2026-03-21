@@ -8,7 +8,7 @@ use crate::models::{Complexity, Task, TaskStatus};
 use crate::store::TaskStore;
 use crate::tui::event::{AnswerSender, ClarificationSender};
 use crate::tui::topology::{generate_topology_file, TaskTopologyInfo};
-use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
+use crate::tui::{Activity, ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -184,7 +184,7 @@ impl Orchestrator {
 
         // Emit Running state after tasks are generated/resumed
         self.emit_event(Event::ExecutionStateChanged {
-            state: ExecutionState::Running,
+            state: ExecutionState::Running { activity: crate::tui::Activity::Planning },
         });
 
         // Emit model info
