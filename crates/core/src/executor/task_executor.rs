@@ -186,9 +186,10 @@ impl TaskExecutor {
 
         // Emit request event (for verbose mode)
         if self.config.debug_mode {
-            // Truncate prompt for display
+            // Truncate prompt for display (handle UTF-8 properly)
             let prompt_preview = if prompt.len() > 500 {
-                format!("{}...\n[truncated, total {} chars]", &prompt[..500], prompt.len())
+                let truncated: String = prompt.chars().take(500).collect();
+                format!("{}...\n[truncated, total {} chars]", truncated, prompt.len())
             } else {
                 prompt.clone()
             };

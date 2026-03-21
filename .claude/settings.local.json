@@ -8,7 +8,8 @@
       "Bash(do git:*)",
       "Bash(echo \"$h\")",
       "Bash(done)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(cargo install:*)"
     ]
   }
 }
