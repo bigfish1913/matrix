@@ -1180,6 +1180,28 @@ OR if splitting needed:
 
             self.print_progress().await;
 
+            // Pre-batch checkpoint: validate dependencies and check for issues
+            match self.checkpoint.pre_batch_checkpoint().await {
+                Ok(result) => {
+                    for warning in &result.warnings {
+                        warn!("Checkpoint warning: {}", warning);
+                    }
+                    for blocked in &result.blocked {
+                        warn!(
+                            task_id = %blocked.task_id,
+                            blocked_by = ?blocked.blocked_by,
+                            "Task blocked by failed dependencies"
+                        );
+                    }
+                    for stalled_id in &result.stalled {
+                        warn!(task_id = %stalled_id, "Task appears stalled");
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "Pre-batch checkpoint failed");
+                }
+            }
+
             // Get schedulable tasks
             let completed_ids: HashSet<String> = self
                 .store
