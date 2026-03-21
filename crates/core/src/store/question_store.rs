@@ -129,10 +129,16 @@ impl QuestionStore {
 
         if let Some(question) = file.questions.iter_mut().find(|q| q.id == id) {
             question.auto_decide(decision.to_string(), reason.to_string());
+
+            // Clone needed data for decision log before saving
+            let task_id = question.task_id.clone();
+            let question_text = question.question.clone();
+
             self.save_questions(&file).await?;
 
-            // Also append to decision log
-            self.append_decision_log(question, decision, reason).await?;
+            // Append to decision log
+            self.append_decision_log(&task_id, &question_text, decision, reason)
+                .await?;
 
             debug!(question_id = %id, decision = %decision, "Auto-decision recorded");
             Ok(())
@@ -144,14 +150,15 @@ impl QuestionStore {
     /// Append decision to log file
     async fn append_decision_log(
         &self,
-        question: &Question,
+        task_id: &str,
+        question: &str,
         decision: &str,
         reason: &str,
     ) -> Result<()> {
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S");
         let entry = format!(
             "[{}] {} | {}\n  Decision: {}\n  Reason: {}\n\n",
-            timestamp, question.task_id, question.question, decision, reason
+            timestamp, task_id, question, decision, reason
         );
 
         // Create file if not exists, append otherwise
