@@ -932,15 +932,106 @@ matrix "goal" --no-checkpoint         # 禁用检查点
 
 ## 测试计划
 
-1. **单元测试**
-   - `CheckpointManager::should_review()` 逻辑
-   - `TaskMemory::extract_from_result()` JSON 解析
-   - `GlobalMemory::append()` 文件操作
+### 单元测试
 
-2. **集成测试**
-   - 完整流程: 执行 5 个任务 → 触发汇报
-   - 依赖失败: 阻塞检测
-   - 记忆持久化: 重启后读取
+```rust
+// checkpoint/manager_tests.rs
+#[tokio::test]
+async fn test_should_review_interval() {
+    let mut config = CheckpointConfig::default();
+    config.review_interval = Some(5);
+    let mut manager = CheckpointManager::new(store, config);
 
-3. **E2E 测试**
-   - 运行真实项目 → 验证记忆文件生成
+    for _ in 0..4 {
+        manager.on_task_completed();
+    }
+    assert!(!manager.should_review(4, 10));
+
+    manager.on_task_completed();
+    assert!(manager.should_review(5, 10));
+}
+
+#[tokio::test]
+async fn test_should_review_percent() {
+    let mut config = CheckpointConfig::default();
+    config.review_interval = None;
+    config.review_percent = Some(20);
+    let manager = CheckpointManager::new(store, config);
+
+    // 20% of 10 = 2, so review at 2, 4, 6, 8, 10
+    assert!(manager.should_review(2, 10));
+}
+
+#[tokio::test]
+async fn test_find_blocked_tasks() {
+    // Setup: task-001 failed, task-002 depends on task-001
+    // Expect: task-002 is blocked
+}
+
+#[tokio::test]
+async fn test_find_stalled_tasks() {
+    // Setup: task in_progress for > threshold
+    // Expect: task is stalled
+}
+
+// checkpoint/bypass_tests.rs
+#[tokio::test]
+async fn test_bypass_remove_dependency() {
+    // Setup: task depends on failed task
+    // Strategy: RemoveDependency
+    // Expect: task.depends_on is updated
+}
+
+#[tokio::test]
+async fn test_bypass_replace_task() {
+    // Setup: task depends on failed task
+    // Strategy: ReplaceTask
+    // Expect: task title/desc/deps updated
+}
+
+#[tokio::test]
+async fn test_bypass_split_and_skip() {
+    // Setup: task depends on failed task
+    // Strategy: SplitAndSkip with 2 parts
+    // Expect: 2 subtasks created, original skipped
+}
+
+#[tokio::test]
+async fn test_bypass_mark_skipped() {
+    // Setup: task depends on failed task
+    // Strategy: MarkSkipped
+    // Expect: task status = Skipped
+}
+
+// memory/task_memory_tests.rs
+#[tokio::test]
+async fn test_task_memory_empty_result() {
+    // Task with None result should produce empty TaskMemory
+    let task = Task::new("t1".into(), "title".into(), "desc".into());
+    // result is None
+    // Expect: TaskMemory::default()
+}
+
+#[tokio::test]
+async fn test_task_memory_malformed_json() {
+    // Claude returns invalid JSON
+    // Expect: return default, not error
+}
+
+#[tokio::test]
+async fn test_global_memory_concurrent_append() {
+    // Multiple concurrent appends should not corrupt file
+    // Use tokio::join! to test
+}
+```
+
+### 集成测试
+
+1. **完整流程**: 执行 5 个任务 → 触发汇报
+2. **依赖失败 + 智能绕过**: task-001 失败 → task-002 阻塞 → 绕过处理
+3. **记忆持久化**: 重启后读取全局/任务记忆
+
+### E2E 测试
+
+1. 运行真实项目 → 验证记忆文件生成
+2. 模拟依赖失败 → 验证绕过策略执行
