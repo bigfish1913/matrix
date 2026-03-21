@@ -1,15 +1,21 @@
 //! Status bar component.
 
-use crate::tui::{ExecutionState, VerbosityLevel};
+use crate::tui::{ExecutionState, VerbosityLevel, Activity};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Spinner frames for animation
 const SPINNER_FRAMES: &[&str] = &["⠋ ", "⠙ ", "⠚ ", "⠞ ", "⠟ "];
+/// Pulse indicator frames
+const PULSE_FRAMES: &[&str] = &["●", "○"];
+/// Warning threshold in seconds
+const WARNING_THRESHOLD_SECS: u64 = 30;
+/// Pulse threshold in seconds (switch from spinner to pulse)
+const PULSE_THRESHOLD_SECS: u64 = 2;
 
 /// Status bar component
 pub struct StatusBar;
@@ -31,12 +37,21 @@ impl StatusBar {
         version: &str,
         current_task_tokens: u32,
         total_tokens: u32,
+        last_pulse_time: Option<&Instant>,
     ) -> Paragraph<'static> {
         let state_color = match state {
             ExecutionState::Idle => Color::Gray,
             ExecutionState::Clarifying => Color::Magenta,
             ExecutionState::Generating => Color::Cyan,
-            ExecutionState::Running { .. } => Color::Yellow,
+            ExecutionState::Running { activity } => match activity {
+                Activity::ApiCall => Color::Yellow,
+                Activity::Test => Color::Blue,
+                Activity::Git => Color::Green,
+                Activity::FileWrite => Color::Cyan,
+                Activity::Planning => Color::Magenta,
+                Activity::Assessing => Color::LightYellow,
+                Activity::Other(_) => Color::Yellow,
+            },
             ExecutionState::Completed => Color::Green,
             ExecutionState::Failed => Color::Red,
         };
@@ -51,6 +66,26 @@ impl StatusBar {
             SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()]
         } else {
             ""
+        };
+
+        // Calculate pulse indicator based on time since last activity
+        let pulse_indicator = if matches!(state, ExecutionState::Running { .. }) {
+            let elapsed_secs = last_pulse_time
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(u64::MAX);
+
+            if elapsed_secs > WARNING_THRESHOLD_SECS {
+                " ⚠".to_string()
+            } else if elapsed_secs > PULSE_THRESHOLD_SECS {
+                // Pulsing indicator
+                let frame = PULSE_FRAMES[spinner_frame % PULSE_FRAMES.len()];
+                format!(" {}", frame)
+            } else {
+                // Still in active spinner phase
+                String::new()
+            }
+        } else {
+            String::new()
         };
 
         let progress = if total > 0 {
@@ -68,17 +103,17 @@ impl StatusBar {
         // Format task elapsed time
         let task_elapsed_str = format_duration(*task_elapsed);
 
-        // Build task string with spinner
+        // Build task string with spinner and pulse indicator
         let task_str = if let Some(t) = current_task {
             if !spinner.is_empty() {
-                format!(" {} {}", spinner, t)
+                format!(" {} {}{}", spinner, t, pulse_indicator)
             } else {
-                format!(" {}", t)
+                format!(" {}{}", t, pulse_indicator)
             }
         } else if !spinner.is_empty() {
-            format!(" {} ", spinner)
+            format!(" {} {}", spinner, pulse_indicator)
         } else {
-            String::new()
+            pulse_indicator
         };
 
         let verbosity_str = match verbosity {

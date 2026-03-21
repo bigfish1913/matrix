@@ -103,6 +103,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         version,
         app.current_task_tokens,
         app.total_tokens,
+        app.last_pulse_time.as_ref(),
     );
     frame.render_widget(status, status_chunks[0]);
 
