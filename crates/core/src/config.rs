@@ -58,6 +58,33 @@ pub const MAX_MEMORY_SIZE: usize = 3000;
 /// 最大文档内容大小
 pub const MAX_DOC_SIZE: usize = 5000;
 
+/// Checkpoint配置
+#[derive(Debug, Clone)]
+pub struct CheckpointConfig {
+    /// 汇报频率: 每 N 个任务 (None = 禁用)
+    pub review_interval: Option<usize>,
+    /// 汇报频率: 每 N% (如 20 表示 20%)
+    pub review_percent: Option<usize>,
+    /// 汇报频率: 距上次汇报超过 N 分钟 (默认 30 分钟)
+    pub review_timeout_mins: Option<u64>,
+    /// 是否在每批任务前验证依赖
+    pub validate_before_batch: bool,
+    /// 任务卡住阈值 (秒), 超过此时间被视为卡住
+    pub stalled_threshold_secs: u64,
+}
+
+impl Default for CheckpointConfig {
+    fn default() -> Self {
+        Self {
+            review_interval: Some(5),
+            review_percent: None,
+            review_timeout_mins: Some(30),
+            validate_before_batch: true,
+            stalled_threshold_secs: 600, // 10 分钟
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +102,14 @@ mod tests {
         assert_eq!(TIMEOUT_PLAN, 120);
         assert_eq!(TIMEOUT_EXEC, 3600);
         assert_eq!(MAX_PROMPT_LENGTH, 80000);
+    }
+
+    #[test]
+    fn test_checkpoint_config_default() {
+        let config = CheckpointConfig::default();
+        assert_eq!(config.review_interval, Some(5));
+        assert_eq!(config.review_timeout_mins, Some(30));
+        assert!(config.validate_before_batch);
+        assert_eq!(config.stalled_threshold_secs, 600);
     }
 }
