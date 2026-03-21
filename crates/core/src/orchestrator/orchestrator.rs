@@ -8,7 +8,7 @@ use crate::models::{Complexity, Task, TaskStatus};
 use crate::store::TaskStore;
 use crate::tui::event::{AnswerSender, ClarificationSender};
 use crate::tui::topology::{generate_topology_file, TaskTopologyInfo};
-use crate::tui::{Activity, ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
+use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
