@@ -272,6 +272,12 @@ pub enum Event {
         task_id: String,
         tokens_used: u32,
     },
+
+    // Activity pulse for heartbeat
+    ActivityPulse {
+        task_id: String,
+        activity: Activity,
+    },
 }
 
 /// A clarification question with multiple choice options
