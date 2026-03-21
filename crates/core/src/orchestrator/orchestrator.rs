@@ -600,9 +600,12 @@ PROJECT GOAL: {}
 CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, just the JSON object.
 Do NOT include any text before or after the JSON.
 
-IMPORTANT: Generate as many tasks as needed at the SMALLEST possible granularity.
-Each task should be completable in a single coding session (30-60 minutes).
-Do NOT limit the number of tasks - use as many as necessary for complete coverage.
+IMPORTANT CONSTRAINTS:
+- Generate at most 10-15 high-level tasks
+- Each task should be completable in 1-2 hours
+- Focus on logical features, not implementation details
+- Combine related work into single tasks
+- Quality over quantity - fewer, more comprehensive tasks are better
 
 Use this EXACT format:
 {{"tasks": [{{"id": "task-001", "title": "Short title", "description": "Detailed description", "depends_on": []}}]}}
@@ -785,6 +788,23 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             return Ok(true);
         }
 
+        // Quick heuristic: skip assessment for obviously simple tasks
+        let simple_keywords = [
+            "fix", "update", "add", "remove", "rename", "refactor",
+            "修复", "更新", "添加", "删除", "重命名", "优化",
+        ];
+        let title_lower = task.title.to_lowercase();
+        let is_simple_title = task.title.len() < 40
+            || simple_keywords.iter().any(|k| title_lower.contains(k));
+        let is_short_desc = task.description.len() < 100;
+
+        if is_simple_title && is_short_desc {
+            info!(task_id = %task.id, "Skipping assessment - appears simple");
+            task.complexity = Complexity::Simple;
+            self.store.save_task(task).await?;
+            return Ok(true);
+        }
+
         info!(task_id = %task.id, "Assessing complexity");
 
         let lang_instruction = match self.config.language.as_str() {
@@ -802,11 +822,10 @@ CURRENT DEPTH: {} / {}
 
 {}
 
-Is this task SIMPLE (completable in 30-60 minutes) or COMPLEX (needs splitting)?
+Is this task SIMPLE (completable in 1-2 hours) or COMPLEX (needs splitting)?
 
-IMPORTANT: If splitting, create as many subtasks as needed at the SMALLEST possible granularity.
-Each subtask should be completable in a single coding session (30-60 minutes).
-Do NOT limit the number of subtasks.
+IMPORTANT: Only split if absolutely necessary. Prefer larger tasks over fragmentation.
+Maximum 2-3 subtasks if splitting is needed.
 
 Respond ONLY with JSON:
 {{"split": false, "reason": "..."}}
@@ -1090,7 +1109,7 @@ OR if splitting needed:
                 break;
             }
 
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
         Ok(())

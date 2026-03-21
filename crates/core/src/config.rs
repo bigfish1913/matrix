@@ -31,7 +31,10 @@ impl fmt::Display for Model {
 // ── 全局配置常量 ──────────────────────────────────────────────────
 
 /// 最大任务拆分深度
-pub const MAX_DEPTH: u32 = 5;
+pub const MAX_DEPTH: u32 = 2;
+
+/// 最大任务数量
+pub const MAX_TASKS: usize = 15;
 
 /// 最大重试次数
 pub const MAX_RETRIES: u32 = 3;
@@ -69,7 +72,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(MAX_DEPTH, 5);
+        assert_eq!(MAX_DEPTH, 2);
+        assert_eq!(MAX_TASKS, 15);
         assert_eq!(MAX_RETRIES, 3);
         assert_eq!(TIMEOUT_PLAN, 120);
         assert_eq!(TIMEOUT_EXEC, 3600);
