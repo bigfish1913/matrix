@@ -127,6 +127,9 @@ pub struct CheckpointConfig {
     /// 汇报频率: 每 N% (如 20 表示 20%)
     pub review_percent: Option<usize>,
 
+    /// 汇报频率: 距上次汇报超过 N 分钟 (默认 30 分钟)
+    pub review_timeout_mins: Option<u64>,
+
     /// 是否在每批任务前验证依赖
     pub validate_before_batch: bool,
 
@@ -139,8 +142,9 @@ impl Default for CheckpointConfig {
         Self {
             review_interval: Some(5),
             review_percent: None,
+            review_timeout_mins: Some(30),  // 30 分钟超时汇报
             validate_before_batch: true,
-            stalled_threshold_secs: 600, // 10 分钟
+            stalled_threshold_secs: 600,    // 10 分钟
         }
     }
 }
@@ -361,9 +365,21 @@ pub struct CheckpointManager {
     tasks_since_review: usize,
     /// 上次汇报的里程碑 (用于百分比模式)
     last_review_at: usize,
+    /// 上次汇报的时间
+    last_review_time: Option<Instant>,
 }
 
 impl CheckpointManager {
+    pub fn new(store: Arc<TaskStore>, config: CheckpointConfig) -> Self {
+        Self {
+            store,
+            config,
+            tasks_since_review: 0,
+            last_review_at: 0,
+            last_review_time: None,
+        }
+    }
+
     /// 每批任务调度前调用
     pub async fn pre_batch_checkpoint(&mut self) -> Result<CheckpointResult> {
         let mut result = CheckpointResult::default();
@@ -384,21 +400,41 @@ impl CheckpointManager {
     }
 
     /// 根据配置判断是否需要汇报
+    /// 条件: 任务数触发 OR 百分比触发 OR 时间超时触发
     pub fn should_review(&self, completed: usize, total: usize) -> bool {
+        // 条件1: 任务数量触发
         if let Some(interval) = self.config.review_interval {
-            return self.tasks_since_review >= interval;
+            if self.tasks_since_review >= interval {
+                return true;
+            }
         }
+
+        // 条件2: 百分比触发
         if let Some(percent) = self.config.review_percent {
             let threshold = (total as f64 * percent as f64 / 100.0) as usize;
             let milestone = completed / threshold.max(1);
-            return milestone > self.last_review_at;
+            if milestone > self.last_review_at {
+                return true;
+            }
         }
+
+        // 条件3: 时间超时触发 (距上次汇报超过 N 分钟)
+        if let Some(timeout_mins) = self.config.review_timeout_mins {
+            if let Some(last_time) = self.last_review_time {
+                let elapsed = last_time.elapsed();
+                if elapsed >= Duration::from_secs(timeout_mins * 60) {
+                    return true;
+                }
+            }
+        }
+
         false
     }
 
     /// 生成进度汇报
     pub async fn generate_review(&mut self) -> Result<ReviewReport> {
         self.tasks_since_review = 0;
+        self.last_review_time = Some(Instant::now());
         // ... 生成汇报
     }
 
@@ -960,6 +996,32 @@ async fn test_should_review_percent() {
 
     // 20% of 10 = 2, so review at 2, 4, 6, 8, 10
     assert!(manager.should_review(2, 10));
+}
+
+#[tokio::test]
+async fn test_should_review_timeout() {
+    let mut config = CheckpointConfig::default();
+    config.review_interval = Some(100);  // 很大，不会被触发
+    config.review_timeout_mins = Some(0); // 立即超时 (测试用)
+
+    let mut manager = CheckpointManager::new(store, config);
+    manager.last_review_time = Some(Instant::now() - Duration::from_secs(1));
+
+    // 超时条件满足，即使任务数不够也应该汇报
+    assert!(manager.should_review(1, 100));
+}
+
+#[tokio::test]
+async fn test_should_review_timeout() {
+    let mut config = CheckpointConfig::default();
+    config.review_interval = Some(100);  // 很大，不会被触发
+    config.review_timeout_mins = Some(0); // 立即超时 (测试用)
+
+    let mut manager = CheckpointManager::new(store, config);
+    manager.last_review_time = Some(Instant::now() - Duration::from_secs(1));
+
+    // 超时条件满足，即使任务数不够也应该汇报
+    assert!(manager.should_review(1, 100));
 }
 
 #[tokio::test]
