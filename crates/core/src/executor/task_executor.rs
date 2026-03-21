@@ -7,7 +7,7 @@ use crate::detector::TestRunnerDetector;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
 use crate::store::TaskStore;
-use crate::tui::{Event, EventSender};
+use crate::tui::{Event, EventSender, ExecutionState, Activity};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,6 +81,13 @@ impl TaskExecutor {
         if let Some(ref sender) = self.event_sender {
             let _ = sender.send(event);
         }
+    }
+
+    /// Emit activity state change
+    fn emit_activity(&self, activity: Activity) {
+        self.emit_event(Event::ExecutionStateChanged {
+            state: ExecutionState::Running { activity },
+        });
     }
 
     /// Setup workspace (install dependencies)
@@ -165,6 +172,9 @@ impl TaskExecutor {
 
         info!(task_id = %task.id, title = %task.title, model = %model, "Executing task");
 
+        // Emit activity state for planning
+        self.emit_activity(Activity::Planning);
+
         // Emit task started event
         self.emit_event(Event::TaskProgress {
             id: task.id.clone(),
@@ -201,7 +211,14 @@ impl TaskExecutor {
             });
         }
 
-        // Call Claude
+        // Call Claude - emit progress before potentially long operation
+        info!(task_id = %task.id, title = %task.title, model = %model, "Calling Claude API...");
+        self.emit_activity(Activity::ApiCall);
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: format!("⏳ Calling {}...", model),
+        });
+
         let result = self
             .runner
             .call(
@@ -212,6 +229,13 @@ impl TaskExecutor {
                 resume_sid.as_deref(),
             )
             .await;
+
+        // Emit completion message
+        info!(task_id = %task.id, title = %task.title, "Claude API call completed");
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "✓ API call completed, processing result...".to_string(),
+        });
 
         match result {
             Ok(claude_result) if claude_result.is_error => {
@@ -269,11 +293,20 @@ impl TaskExecutor {
     /// Run tests for a task
     pub async fn test(&self, task: &mut Task) -> Result<(bool, String)> {
         info!(task_id = %task.id, title = %task.title, "Running tests");
+        self.emit_activity(Activity::Test);
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "⏳ Running tests...".to_string(),
+        });
 
         let runner = TestRunnerDetector::detect(&self.workspace);
 
         if runner.is_none() {
             info!("No test runner detected, skipping tests");
+            self.emit_event(Event::TaskProgress {
+                id: task.id.clone(),
+                message: "✓ No test runner detected, skipped".to_string(),
+            });
             return Ok((true, "No test runner detected".to_string()));
         }
 
@@ -294,14 +327,26 @@ impl TaskExecutor {
 
                 if output.status.success() {
                     info!(task_id = %task.id, title = %task.title, "Tests passed");
+                    self.emit_event(Event::TaskProgress {
+                        id: task.id.clone(),
+                        message: "✓ Tests passed".to_string(),
+                    });
                     Ok((true, combined))
                 } else {
                     warn!(task_id = %task.id, title = %task.title, "Tests failed");
+                    self.emit_event(Event::TaskProgress {
+                        id: task.id.clone(),
+                        message: "✗ Tests failed, attempting fix...".to_string(),
+                    });
                     Ok((false, combined))
                 }
             }
             Err(e) => {
                 warn!(task_id = %task.id, title = %task.title, error = %e, "Test command failed");
+                self.emit_event(Event::TaskProgress {
+                    id: task.id.clone(),
+                    message: format!("⚠ Test command error: {}", e),
+                });
                 Ok((false, e.to_string()))
             }
         }
@@ -310,6 +355,10 @@ impl TaskExecutor {
     /// Attempt to fix test failures
     pub async fn fix_test_failure(&self, task: &mut Task, test_output: &str) -> Result<bool> {
         info!(task_id = %task.id, title = %task.title, "Attempting to fix test failures");
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "🔧 Attempting to fix test failures...".to_string(),
+        });
 
         let prompt = format!(
             r#"You are a senior developer fixing test failures.
