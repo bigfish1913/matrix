@@ -7,6 +7,7 @@ use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::models::{Complexity, Task, TaskStatus};
 use crate::store::TaskStore;
 use crate::tui::event::{AnswerSender, ClarificationSender};
+use crate::tui::topology::{generate_topology_file, TaskTopologyInfo};
 use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -103,6 +104,34 @@ impl Orchestrator {
         if let Some(ref sender) = self.config.event_sender {
             let _ = sender.send(event);
         }
+    }
+
+    /// Save task topology to a markdown file
+    async fn save_topology(&self) -> Result<()> {
+        let tasks = self.store.all_tasks().await?;
+        if tasks.is_empty() {
+            return Ok(());
+        }
+
+        let topology_info: Vec<TaskTopologyInfo> = tasks
+            .iter()
+            .map(|t| TaskTopologyInfo {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                status: t.status,
+                parent_id: t.parent_id.clone(),
+                depth: t.depth,
+                depends_on: t.depends_on.clone(),
+            })
+            .collect();
+
+        let content = generate_topology_file(&topology_info);
+        let topology_path = self.config.tasks_dir.join("topology.md");
+
+        fs::write(&topology_path, content).await?;
+        info!(path = %topology_path.display(), "Saved task topology");
+
+        Ok(())
     }
 
     /// Run the orchestrator
@@ -600,12 +629,13 @@ PROJECT GOAL: {}
 CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, just the JSON object.
 Do NOT include any text before or after the JSON.
 
-IMPORTANT CONSTRAINTS:
-- Generate at most 10-15 high-level tasks
-- Each task should be completable in 1-2 hours
-- Focus on logical features, not implementation details
-- Combine related work into single tasks
-- Quality over quantity - fewer, more comprehensive tasks are better
+TASK DESIGN PRINCIPLES:
+- Determine task count based on actual project complexity (simple: 3-5, medium: 8-12, complex: 15-25)
+- Each task should be a complete, testable unit of work (30-90 minutes)
+- Focus on logical features and components, not micro-steps
+- Combine related work into single comprehensive tasks
+- Prefer fewer high-quality tasks over many fragmented ones
+- Tasks should have clear deliverables and success criteria
 
 Use this EXACT format:
 {{"tasks": [{{"id": "task-001", "title": "Short title", "description": "Detailed description", "depends_on": []}}]}}
@@ -688,7 +718,8 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
                 }
 
                 self.store.save_manifest(&self.config.goal).await?;
-                
+                self.save_topology().await?;
+
                 // If there's a clarification task, wait for user response
                 if let Some(clar_task) = clarification_task {
                     info!("Waiting for user clarification response...");
@@ -879,6 +910,7 @@ OR if splitting needed:
             task.complexity = Complexity::Complex;
             self.store.save_task(task).await?;
             self.store.save_manifest(&self.config.goal).await?;
+            self.save_topology().await?;
 
             return Ok(false);
         }
@@ -1175,6 +1207,9 @@ OR if splitting needed:
     }
 
     async fn print_summary(&self) -> Result<()> {
+        // Save final topology
+        self.save_topology().await?;
+
         let completed = self.store.count(TaskStatus::Completed).await?;
         let failed = self.store.count(TaskStatus::Failed).await?;
         let total = self.store.total().await?;
