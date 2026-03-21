@@ -1453,7 +1453,10 @@ async fn run_task_pipeline(
 
     // Set started_at for stalled detection
     task.started_at = Some(Utc::now());
-    store.save_task(&task).await?;
+    if let Err(e) = store.save_task(&task).await {
+        error!(task_id = %task.id, error = %e, "Failed to save task as InProgress");
+        // Continue anyway - task is in memory and will be processed
+    }
 
     // Emit InProgress status
     if let Some(ref sender) = event_sender {
@@ -1464,19 +1467,29 @@ async fn run_task_pipeline(
     }
 
     // Execute
-    let success = executor.execute(&mut task, &thread_name).await?;
+    let success = match executor.execute(&mut task, &thread_name).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!(task_id = %task.id, error = %e, "Executor failed");
+            false
+        }
+    };
 
     if !success {
         if task.retries < MAX_RETRIES {
             task.retries += 1;
             task.status = TaskStatus::Pending;
             task.started_at = None;
-            store.save_task(&task).await?;
+            if let Err(e) = store.save_task(&task).await {
+                error!(task_id = %task.id, error = %e, "Failed to save task for retry");
+            }
             warn!(task_id = %task.id, attempt = task.retries, "Retrying");
         } else {
             task.status = TaskStatus::Failed;
             task.started_at = None;
-            store.save_task(&task).await?;
+            if let Err(e) = store.save_task(&task).await {
+                error!(task_id = %task.id, error = %e, "Failed to save task as Failed");
+            }
             error!(task_id = %task.id, "Permanently failed");
             // Emit Failed status
             if let Some(ref sender) = event_sender {
@@ -1490,25 +1503,41 @@ async fn run_task_pipeline(
     }
 
     // Test
-    let (tests_passed, test_output) = executor.test(&mut task).await?;
+    let (tests_passed, test_output) = match executor.test(&mut task).await {
+        Ok(result) => result,
+        Err(e) => {
+            error!(task_id = %task.id, error = %e, "Test execution failed");
+            (false, format!("Test execution error: {}", e))
+        }
+    };
 
     if !tests_passed {
         // Try to fix
-        let fixed = executor.fix_test_failure(&mut task, &test_output).await?;
+        let fixed = match executor.fix_test_failure(&mut task, &test_output).await {
+            Ok(f) => f,
+            Err(e) => {
+                error!(task_id = %task.id, error = %e, "Fix attempt failed");
+                false
+            }
+        };
 
         if !fixed && task.retries < MAX_RETRIES {
             task.retries += 1;
             task.status = TaskStatus::Pending;
             task.test_failure_context = Some(test_output);
             task.started_at = None;
-            store.save_task(&task).await?;
+            if let Err(e) = store.save_task(&task).await {
+                error!(task_id = %task.id, error = %e, "Failed to save task for retry after test");
+            }
             warn!(task_id = %task.id, attempt = task.retries, "Tests failed, retrying");
             return Ok(None);
         } else if !fixed {
             task.status = TaskStatus::Failed;
             task.error = Some(format!("Tests failed: {}", test_output));
             task.started_at = None;
-            store.save_task(&task).await?;
+            if let Err(e) = store.save_task(&task).await {
+                error!(task_id = %task.id, error = %e, "Failed to save task as Failed after test");
+            }
             error!(task_id = %task.id, "Tests failed permanently");
             // Emit Failed status
             if let Some(ref sender) = event_sender {
@@ -1524,7 +1553,9 @@ async fn run_task_pipeline(
     // Mark completed
     task.status = TaskStatus::Completed;
     task.started_at = None;
-    store.save_task(&task).await?;
+    if let Err(e) = store.save_task(&task).await {
+        error!(task_id = %task.id, error = %e, "Failed to save task as Completed");
+    }
     info!(task_id = %task.id, "Task completed successfully");
 
     // Emit Completed status
