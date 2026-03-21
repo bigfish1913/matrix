@@ -601,8 +601,9 @@ impl TuiApp {
                     let entries = self.log_buffer.get_entries();
                     let max_scroll = entries.len() as u16;
                     self.logs_scroll = (self.logs_scroll + delta_abs).min(max_scroll);
-                    // Re-enable auto-follow if scrolled to bottom
-                    if self.logs_scroll >= max_scroll.saturating_sub(5) {
+                    // Only re-enable auto-follow if content exceeds assumed viewport height
+                    // This prevents "jump to top" when content is short
+                    if max_scroll > 15 && self.logs_scroll >= max_scroll.saturating_sub(5) {
                         self.logs_auto_follow = true;
                     }
                 }
@@ -904,7 +905,9 @@ impl TuiApp {
                 if self.logs_scroll < max_scroll {
                     self.logs_scroll = self.logs_scroll.saturating_add(1);
                 }
-                if self.logs_scroll >= max_scroll.saturating_sub(5) {
+                // Only re-enable auto-follow if content exceeds assumed viewport height
+                // This prevents "jump to top" when content is short
+                if max_scroll > 15 && self.logs_scroll >= max_scroll.saturating_sub(5) {
                     self.logs_auto_follow = true;
                 }
             }
