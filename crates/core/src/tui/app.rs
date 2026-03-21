@@ -2,7 +2,7 @@
 
 use crate::models::TaskStatus;
 use crate::tui::{
-    ClarificationQuestion, ClarificationSender, ConfirmSender, Event, EventReceiver,
+    Activity, ClarificationQuestion, ClarificationSender, ConfirmSender, Event, EventReceiver,
     ExecutionState, Key, LogBuffer, LogContext, VerbosityLevel,
 };
 use std::collections::HashMap;
@@ -233,6 +233,10 @@ pub struct TuiApp {
     pub start_time: Option<Instant>,      // Total elapsed time
     pub task_start_time: Option<Instant>, // Current task elapsed time
 
+    // Activity pulse tracking
+    pub last_pulse_time: Option<Instant>,
+    pub current_activity: Option<Activity>,
+
     // Token usage tracking
     pub current_task_tokens: u32, // Tokens used in current task
     pub total_tokens: u32,        // Total tokens used across all tasks
@@ -305,6 +309,8 @@ impl TuiApp {
             current_task_tokens: 0,
             total_tokens: 0,
             spinner_frame: 0,
+            last_pulse_time: None,
+            current_activity: None,
             tasks: Vec::new(),
             tasks_scroll: 0,
             tree_view: false,
@@ -559,6 +565,72 @@ impl TuiApp {
                 self.quit_confirm.pending = false;
             }
             _ => {}
+        }
+    }
+
+    /// Handle TUI events (keyboard and mouse)
+    pub fn handle_tui_event(&mut self, event: crate::tui::TuiEvent) {
+        match event {
+            crate::tui::TuiEvent::Key(key) => self.handle_key(key),
+            crate::tui::TuiEvent::MouseScroll { delta } => self.handle_mouse_scroll(delta),
+            _ => {}
+        }
+    }
+
+    /// Handle mouse scroll
+    fn handle_mouse_scroll(&mut self, delta: i16) {
+        // Don't scroll if in search mode or confirmation dialogs
+        if self.search.is_active() || self.resume_confirm.is_active() || self.quit_confirm.pending {
+            return;
+        }
+
+        // Don't scroll if clarification dialog is active
+        if self.clarification.is_active() {
+            return;
+        }
+
+        match self.current_tab {
+            Tab::Logs => {
+                if delta > 0 {
+                    // Scroll up
+                    self.logs_scroll = self.logs_scroll.saturating_sub(delta as u16);
+                    self.logs_auto_follow = false;
+                } else {
+                    // Scroll down
+                    let delta_abs = (-delta) as u16;
+                    let entries = self.log_buffer.get_entries();
+                    let max_scroll = entries.len() as u16;
+                    self.logs_scroll = (self.logs_scroll + delta_abs).min(max_scroll);
+                    // Re-enable auto-follow if scrolled to bottom
+                    if self.logs_scroll >= max_scroll.saturating_sub(5) {
+                        self.logs_auto_follow = true;
+                    }
+                }
+            }
+            Tab::Tasks => {
+                if delta > 0 {
+                    self.tasks_scroll = self.tasks_scroll.saturating_sub(delta as usize);
+                } else {
+                    let delta_abs = (-delta) as usize;
+                    let filtered = self.filtered_tasks();
+                    let max_scroll = filtered.len().saturating_sub(1);
+                    self.tasks_scroll = (self.tasks_scroll + delta_abs).min(max_scroll);
+                }
+            }
+            Tab::Output => {
+                if delta > 0 {
+                    self.output_scroll = self.output_scroll.saturating_sub(delta as u16);
+                    self.output_auto_follow = false;
+                } else {
+                    let delta_abs = (-delta) as u16;
+                    let max_scroll = self.output_lines.len() as u16;
+                    self.output_scroll = (self.output_scroll + delta_abs).min(max_scroll);
+                    // Re-enable auto-follow if scrolled to bottom
+                    if self.output_scroll >= max_scroll.saturating_sub(5) {
+                        self.output_auto_follow = true;
+                    }
+                }
+            }
         }
     }
 
@@ -978,6 +1050,11 @@ impl TuiApp {
                 if state != ExecutionState::Idle && self.start_time.is_none() {
                     self.start_time = Some(Instant::now());
                 }
+                // Extract activity if Running
+                if let ExecutionState::Running { activity } = state {
+                    self.current_activity = Some(activity);
+                    self.last_pulse_time = Some(Instant::now());
+                }
             }
             Event::ProgressUpdate {
                 completed,
@@ -1042,6 +1119,14 @@ impl TuiApp {
                 self.current_task_tokens += tokens_used;
                 // Update total tokens
                 self.total_tokens += tokens_used;
+            }
+            Event::ActivityPulse { task_id, activity } => {
+                self.last_pulse_time = Some(Instant::now());
+                self.current_activity = Some(activity);
+                // Keep current_task_id in sync
+                if self.current_task_id.is_none() {
+                    self.current_task_id = Some(task_id);
+                }
             }
         }
     }
