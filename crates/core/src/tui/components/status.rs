@@ -10,8 +10,6 @@ use std::time::{Duration, Instant};
 
 /// Spinner frames - Braille animation for smooth spinning
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-/// Breathing dots - pulsing effect
-const BREATHING_DOTS: &[&str] = &["⣀", "⣄", "⣤", "⣶", "⣾", "⣿", "⣾", "⣶"];
 
 /// Status bar component
 pub struct StatusBar;
@@ -52,21 +50,24 @@ impl StatusBar {
             ExecutionState::Failed => Color::Red,
         };
 
-        // Check if we have recent activity (within 2 seconds)
+        // Check if we have recent activity (within 3 seconds)
         let has_recent_pulse = last_pulse_time
-            .map(|t| t.elapsed() < Duration::from_secs(2))
+            .map(|t| t.elapsed() < Duration::from_secs(3))
             .unwrap_or(false);
 
-        // Spinner animation with breathing effect
-        let (spinner, breathing) = if matches!(
+        // Breathing indicator - blinks based on tick frame
+        let blink_on = (spinner_frame / 3) % 2 == 0;
+        let breath_indicator = if has_recent_pulse && blink_on { "●" } else { "○" };
+
+        // Spinner animation
+        let spinner = if matches!(
             state,
             ExecutionState::Generating | ExecutionState::Clarifying | ExecutionState::Running { .. }
         ) {
             let frame = spinner_frame % SPINNER_FRAMES.len();
-            let breath_frame = (spinner_frame / 2) % BREATHING_DOTS.len();
-            (SPINNER_FRAMES[frame], BREATHING_DOTS[breath_frame])
+            SPINNER_FRAMES[frame]
         } else {
-            ("", "")
+            ""
         };
 
         // Activity indicator with activity type
@@ -80,11 +81,9 @@ impl StatusBar {
                 Activity::Assessing => "ASSESS",
                 Activity::Other(_) => "WORK",
             };
-            // Add pulse indicator if recent activity
-            let pulse = if has_recent_pulse { "●" } else { "○" };
-            format!(" {}{} {}", breathing, pulse, activity_name)
+            format!("{} {}", breath_indicator, activity_name)
         } else if !spinner.is_empty() {
-            format!(" {} ", breathing)
+            format!("{}", breath_indicator)
         } else {
             String::new()
         };
@@ -104,15 +103,15 @@ impl StatusBar {
         // Format task elapsed time
         let task_elapsed_str = format_duration(*task_elapsed);
 
-        // Build task string with activity/spinner indicators
+        // Build task string with spinner
         let task_str = if let Some(t) = current_task {
             if !spinner.is_empty() {
-                format!(" {}{} {}", spinner, breathing, t)
+                format!(" {} {}", spinner, t)
             } else {
                 format!(" {}", t)
             }
         } else if !spinner.is_empty() {
-            format!(" {}{}", spinner, breathing)
+            format!(" {}", spinner)
         } else {
             String::new()
         };
