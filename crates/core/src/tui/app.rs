@@ -237,28 +237,43 @@ pub struct TaskDisplay {
     pub error: Option<String>,
 }
 
-/// Claude output line
+/// Claude output line with sequence number for ordering
 #[derive(Debug, Clone)]
 pub enum OutputLine {
     Thinking {
         task_id: String,
         content: String,
+        seq: u64, // Sequence number for ordering
     },
     ToolUse {
         task_id: String,
         tool_name: String,
         tool_input: Option<String>,
+        seq: u64,
     },
     ToolResult {
         task_id: String,
         tool_name: String,
         result: String,
         success: bool,
+        seq: u64,
     },
     Result {
         task_id: String,
         content: String,
+        seq: u64,
     },
+}
+
+impl OutputLine {
+    pub fn seq(&self) -> u64 {
+        match self {
+            OutputLine::Thinking { seq, .. } => *seq,
+            OutputLine::ToolUse { seq, .. } => *seq,
+            OutputLine::ToolResult { seq, .. } => *seq,
+            OutputLine::Result { seq, .. } => *seq,
+        }
+    }
 }
 
 /// Main TUI application state
@@ -308,6 +323,7 @@ pub struct TuiApp {
     pub output_task_id: Option<String>, // Currently viewed task output
     pub output_auto_follow: bool,       // Auto-scroll to bottom on new output
     pub max_output_lines: usize,        // Maximum lines to keep in output
+    pub output_seq_counter: u64,        // Global sequence counter for ordering
 
     // Logs
     pub log_buffer: LogBuffer,
@@ -378,6 +394,7 @@ impl TuiApp {
             output_task_id: None,
             output_auto_follow: true,
             max_output_lines: 500,
+            output_seq_counter: 0,
             log_buffer: LogBuffer::default(),
             logs_scroll: 0,
             logs_auto_follow: true,
@@ -456,14 +473,13 @@ impl TuiApp {
     /// Switch output view to all tasks
     pub fn switch_output_to_all(&mut self) {
         self.output_task_id = None;
-        // Combine all outputs sorted by time (approximated by insertion order)
-        let task_ids: Vec<String> = self.tasks.iter().map(|t| t.id.clone()).collect();
+        // Combine all outputs and sort by sequence number
         let mut all_lines: Vec<OutputLine> = Vec::new();
-        for task_id in &task_ids {
-            if let Some(lines) = self.output_by_task.get(task_id.as_str()) {
-                all_lines.extend(lines.clone());
-            }
+        for lines in self.output_by_task.values() {
+            all_lines.extend(lines.clone());
         }
+        // Sort by sequence number to maintain chronological order
+        all_lines.sort_by_key(|line| line.seq());
         self.output_lines = all_lines;
         self.output_scroll = 0;
         self.output_auto_follow = true;
@@ -485,18 +501,21 @@ impl TuiApp {
             }
         }
 
-        // Add to current view if applicable
-        if self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id) {
-            self.output_lines.push(line);
+        // Add to current view if applicable (show in "all" view or matching task view)
+        let should_add_to_view = self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id);
+        if should_add_to_view {
+            self.output_lines.push(line.clone());
             // Trim current view if needed
             if self.output_lines.len() > self.max_output_lines {
                 let remove_count = self.output_lines.len() - self.max_output_lines;
                 self.output_lines.drain(0..remove_count);
             }
-            // Auto-scroll to bottom if auto_follow is enabled
-            if self.output_auto_follow {
-                self.output_scroll = u16::MAX;
-            }
+        }
+
+        // Auto-scroll to bottom if auto_follow is enabled and viewing the matching task or all
+        if self.output_auto_follow && should_add_to_view {
+            // Use a special marker value (u16::MAX means "scroll to end")
+            self.output_scroll = u16::MAX;
         }
     }
 
@@ -1162,9 +1181,12 @@ impl TuiApp {
                 }
             }
             Event::ClaudeThinking { task_id, content } => {
+                let seq = self.output_seq_counter;
+                self.output_seq_counter += 1;
                 let line = OutputLine::Thinking {
                     task_id: task_id.clone(),
                     content,
+                    seq,
                 };
                 self.add_output_line(task_id, line);
             }
@@ -1174,10 +1196,13 @@ impl TuiApp {
                 tool_input,
             } => {
                 if self.verbosity >= VerbosityLevel::Normal {
+                    let seq = self.output_seq_counter;
+                    self.output_seq_counter += 1;
                     let line = OutputLine::ToolUse {
                         task_id: task_id.clone(),
                         tool_name,
                         tool_input,
+                        seq,
                     };
                     self.add_output_line(task_id, line);
                 }
@@ -1189,11 +1214,14 @@ impl TuiApp {
                 success,
             } => {
                 if self.verbosity >= VerbosityLevel::Normal {
+                    let seq = self.output_seq_counter;
+                    self.output_seq_counter += 1;
                     let line = OutputLine::ToolResult {
                         task_id: task_id.clone(),
                         tool_name,
                         result,
                         success,
+                        seq,
                     };
                     self.add_output_line(task_id, line);
                 }
@@ -1212,9 +1240,12 @@ impl TuiApp {
                     format!("[Claude Request] Model: {} | Timeout: {}s | Length: {} chars",
                         model, timeout_secs, prompt.len())
                 };
+                let seq = self.output_seq_counter;
+                self.output_seq_counter += 1;
                 let line = OutputLine::Result {
                     task_id: task_id.clone(),
                     content: summary,
+                    seq,
                 };
                 self.add_output_line(task_id, line);
             }
@@ -1223,9 +1254,12 @@ impl TuiApp {
                 let header = "═══════════════════════════════════════\n\
                               ═══ Claude Response ═══\n\
                               ═══════════════════════════════════════";
+                let seq = self.output_seq_counter;
+                self.output_seq_counter += 1;
                 let line = OutputLine::Result {
                     task_id: task_id.clone(),
                     content: format!("{}\n\n{}", header, result),
+                    seq,
                 };
                 self.add_output_line(task_id, line);
             }

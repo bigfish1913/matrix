@@ -46,6 +46,7 @@ impl OutputPanel {
             OutputLine::Thinking {
                 task_id: _,
                 content,
+                seq: _,
             } => {
                 if verbosity == VerbosityLevel::Verbose {
                     // Parse thinking content as markdown
@@ -65,6 +66,7 @@ impl OutputPanel {
                 task_id: _,
                 tool_name,
                 tool_input,
+                seq: _,
             } => {
                 let input_preview = tool_input
                     .as_ref()
@@ -83,6 +85,7 @@ impl OutputPanel {
                 tool_name,
                 result,
                 success,
+                seq: _,
             } => {
                 let icon = if *success { "✓" } else { "✗" };
                 let color = if *success { Color::Green } else { Color::Red };
@@ -124,6 +127,7 @@ impl OutputPanel {
             OutputLine::Result {
                 task_id: _,
                 content,
+                seq: _,
             } => {
                 // Render result as markdown
                 let mut lines = vec![Line::styled(
