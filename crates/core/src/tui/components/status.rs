@@ -8,10 +8,10 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-/// Spinner frames - more visible animation
-const SPINNER_FRAMES: &[&str] = &["⣾", "⣽", "⻯", "⢿", "⡿", "⣟", "⣯", "⣷"];
-/// Breathing dots for activity indicator
-const BREATHING_DOTS: &[&str] = &["⠁", "⠃", "⠇", "⡇", "⣇", "⣧", "⣷", "⣾"];
+/// Spinner frames - Braille animation for smooth spinning
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Breathing dots - pulsing effect
+const BREATHING_DOTS: &[&str] = &["⣀", "⣄", "⣤", "⣶", "⣾", "⣿", "⣾", "⣶"];
 
 /// Status bar component
 pub struct StatusBar;
@@ -57,7 +57,7 @@ impl StatusBar {
             .map(|t| t.elapsed() < Duration::from_secs(2))
             .unwrap_or(false);
 
-        // Spinner animation - more visible with breathing effect
+        // Spinner animation with breathing effect
         let (spinner, breathing) = if matches!(
             state,
             ExecutionState::Generating | ExecutionState::Clarifying | ExecutionState::Running { .. }
