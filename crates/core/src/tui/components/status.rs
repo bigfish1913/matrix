@@ -8,10 +8,10 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-/// Spinner frames - more visible with brackets
-const SPINNER_FRAMES: &[&str] = &["[    ]", "[=   ]", "[==  ]", "[=== ]", "[====]", "[ ===]", "[  ==]", "[   =]"];
-/// Activity indicator symbols with rotation effect
-const ACTIVITY_SYMBOLS: &[&str] = &["◢", "◣", "◤", "◥"];
+/// Spinner frames - simple ASCII for maximum compatibility
+const SPINNER_FRAMES: &[&str] = &["|", "/", "-", "\\", "|", "/", "-", "\\"];
+/// Activity indicator - simple rotating dash
+const ACTIVITY_SYMBOLS: &[&str] = &["-", "\\", "|", "/"];
 
 /// Status bar component
 pub struct StatusBar;
