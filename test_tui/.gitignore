@@ -1,0 +1,21 @@
+# Rust
+/target/
+Cargo.lock
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Build
+dist/
+build/
+
+# Logs
+*.log
+logs/
