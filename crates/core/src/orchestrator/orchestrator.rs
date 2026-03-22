@@ -1266,7 +1266,22 @@ OR if splitting needed:
                         }
                     }
                     for stalled_id in &result.stalled {
-                        warn!(task_id = %stalled_id, "Task appears stalled");
+                        warn!(task_id = %stalled_id, "Task appears stalled - resetting to Pending");
+                        // Reset stalled task to Pending for re-dispatch
+                        match self.store.load_task(stalled_id).await {
+                            Ok(mut task) => {
+                                task.status = TaskStatus::Pending;
+                                task.started_at = None;
+                                if let Err(e) = self.store.save_task(&task).await {
+                                    error!(task_id = %stalled_id, error = %e, "Failed to reset stalled task");
+                                } else {
+                                    info!(task_id = %stalled_id, "Reset stalled task to Pending");
+                                }
+                            }
+                            Err(e) => {
+                                error!(task_id = %stalled_id, error = %e, "Failed to load stalled task");
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -1323,16 +1338,16 @@ OR if splitting needed:
             // Solution: Filter by actual task status AND dispatched_ids
             let mut pending: Vec<Task> = Vec::new();
             for task in self.store.pending_tasks().await? {
-                // Skip if in dispatched_ids (currently being processed)
+                // Check if in dispatched_ids (currently being processed)
                 if dispatched_ids.contains(&task.id) {
-                    // Double-check: if status is Pending but in dispatched_ids,
-                    // this might be a stale entry from a retry
-                    // Allow re-dispatch after logging a warning
+                    // If status is Pending but in dispatched_ids, this is a stale entry
+                    // from a previous run that didn't complete properly
                     warn!(
                         task_id = %task.id,
-                        "Task is Pending but also in dispatched_ids - possible retry state inconsistency"
+                        "Task is Pending but also in dispatched_ids - cleaning up stale entry"
                     );
-                    // Don't skip - allow re-dispatch for retry tasks
+                    // Remove from dispatched_ids to allow re-dispatch
+                    dispatched_ids.remove(&task.id);
                 }
 
                 // Check if all dependencies are satisfied
@@ -1532,7 +1547,7 @@ OR if splitting needed:
         let all_tasks = self.store.all_tasks().await?;
         let mut reset_count = 0;
         let now = Utc::now();
-        let stall_threshold_minutes = 30; // Consider tasks stalled after 30 minutes
+        let stall_threshold_minutes = 10; // Consider tasks stalled after 10 minutes (match checkpoint)
 
         for mut task in all_tasks {
             if task.status != TaskStatus::InProgress {
@@ -1739,6 +1754,54 @@ async fn run_task_pipeline(
                 error!(task_id = %task.id, error = %e, "Failed to save task as Failed after test");
             }
             error!(task_id = %task.id, "Tests failed permanently");
+            // Emit Failed status
+            if let Some(ref sender) = event_sender {
+                let _ = sender.send(Event::TaskStatusChanged {
+                    id: task.id.clone(),
+                    status: TaskStatus::Failed,
+                });
+            }
+            return Ok(None);
+        }
+    }
+
+    // Build verification - ensure the code actually compiles and builds
+    let (build_passed, build_output) = match executor.verify_build(&mut task).await {
+        Ok(result) => result,
+        Err(e) => {
+            warn!(task_id = %task.id, error = %e, "Build verification error");
+            (true, format!("Build verification skipped: {}", e)) // Continue on error
+        }
+    };
+
+    if !build_passed {
+        // Try to fix build errors
+        let fixed = match executor.fix_build_errors(&mut task, &build_output).await {
+            Ok(f) => f,
+            Err(e) => {
+                error!(task_id = %task.id, error = %e, "Build fix attempt failed");
+                false
+            }
+        };
+
+        if !fixed && task.retries < MAX_RETRIES {
+            task.retries += 1;
+            task.status = TaskStatus::Pending;
+            task.error = Some(format!("Build failed: {}", build_output));
+            task.started_at = None;
+            if let Err(e) = store.save_task(&task).await {
+                error!(task_id = %task.id, error = %e, "Failed to save task for retry after build");
+            }
+            warn!(task_id = %task.id, attempt = task.retries, "Build failed, retrying");
+            return Ok(None);
+        } else if !fixed {
+            task.status = TaskStatus::Failed;
+            task.error = Some(format!("Build failed: {}", build_output));
+            task.started_at = None;
+            if let Err(e) = store.save_task(&task).await {
+                error!(task_id = %task.id, error = %e, "Failed to save task as Failed after build");
+            }
+            error!(task_id = %task.id, "Build failed permanently");
             // Emit Failed status
             if let Some(ref sender) = event_sender {
                 let _ = sender.send(Event::TaskStatusChanged {

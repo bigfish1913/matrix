@@ -8,8 +8,8 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-/// Spinner frames - ASCII animation for maximum compatibility
-const SPINNER_FRAMES: &[&str] = &["|", "/", "-", "\\"];
+/// Spinner frames - Braille pattern animation like Claude Code
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Status bar component
 pub struct StatusBar;
@@ -53,13 +53,18 @@ impl StatusBar {
         // Check if we have any activity
         let has_activity = state != ExecutionState::Idle && state != ExecutionState::Completed && state != ExecutionState::Failed;
 
-        // Breathing indicator - pure ASCII for maximum compatibility
-        // Alternates between > and >> to show liveness
-        let breathing = if has_activity {
-            let frames = [">", ">>"];
-            frames[(spinner_frame / 2) % frames.len()]
+        // Pulse indicator - cycles through intensity levels
+        let pulse = if has_activity {
+            let intensity = (spinner_frame % 4) as u8;
+            match intensity {
+                0 => "●",
+                1 => "○",
+                2 => "◎",
+                3 => "○",
+                _ => "●",
+            }
         } else {
-            "-"
+            "○"
         };
 
         // Spinner animation
@@ -73,7 +78,7 @@ impl StatusBar {
             ""
         };
 
-        // Activity indicator with breathing marker
+        // Activity indicator with pulse marker
         let activity_indicator = if let ExecutionState::Running { activity } = state {
             let activity_name = match activity {
                 Activity::ApiCall => "API",
@@ -84,9 +89,9 @@ impl StatusBar {
                 Activity::Assessing => "ASSESS",
                 Activity::Other(_) => "WORK",
             };
-            format!("[{} {}]", breathing, activity_name)
+            format!("[{} {}]", pulse, activity_name)
         } else if has_activity {
-            format!("[{}]", breathing)
+            format!("[{}]", pulse)
         } else {
             String::new()
         };

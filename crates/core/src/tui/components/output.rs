@@ -10,7 +10,6 @@ use ratatui::{
 };
 
 /// Maximum lines to show for each output type in normal mode
-const MAX_THINKING_LINES: usize = 3;
 const MAX_TOOL_INPUT_LINES: usize = 2;
 const MAX_TOOL_RESULT_LINES: usize = 5;
 const MAX_RESULT_LINES: usize = 10;
@@ -20,6 +19,7 @@ pub struct OutputPanel;
 
 impl OutputPanel {
     /// Render output panel with content
+    /// Each line is prefixed with [Task:xxx] to identify which task it belongs to
     pub fn render(
         lines: &[OutputLine],
         verbosity: VerbosityLevel,
@@ -44,6 +44,14 @@ impl OutputPanel {
         verbosity: VerbosityLevel,
         width: usize,
     ) -> Vec<Line<'static>> {
+        // Get task_id prefix
+        let task_prefix = match line {
+            OutputLine::Thinking { task_id, .. } => format!("[{}] ", task_id),
+            OutputLine::ToolUse { task_id, .. } => format!("[{}] ", task_id),
+            OutputLine::ToolResult { task_id, .. } => format!("[{}] ", task_id),
+            OutputLine::Result { task_id, .. } => format!("[{}] ", task_id),
+        };
+
         match line {
             OutputLine::Thinking {
                 task_id: _,
@@ -55,16 +63,32 @@ impl OutputPanel {
                     let mut md_lines = render_markdown(content, width);
                     if md_lines.is_empty() {
                         md_lines.push(Line::from(vec![
-                            Span::styled("[Thinking] ", Style::default().fg(Color::Magenta)),
+                            Span::styled(
+                                format!("{}[Thinking] ", task_prefix),
+                                Style::default().fg(Color::Magenta)
+                            ),
                             Span::styled(content.clone(), Style::default().fg(Color::Gray)),
                         ]));
+                    } else {
+                        // Prefix first line with task_id
+                        if let Some(first) = md_lines.first_mut() {
+                            let mut new_spans = vec![Span::styled(
+                                format!("{}[Thinking] ", task_prefix),
+                                Style::default().fg(Color::Magenta)
+                            )];
+                            new_spans.extend(first.spans.clone());
+                            *first = Line::from(new_spans);
+                        }
                     }
                     md_lines
                 } else {
                     // Show limited preview in normal mode
                     let preview: String = content.chars().take(80).collect();
                     vec![Line::from(vec![
-                        Span::styled("[Thinking] ", Style::default().fg(Color::Magenta)),
+                        Span::styled(
+                            format!("{}[Thinking] ", task_prefix),
+                            Style::default().fg(Color::Magenta)
+                        ),
                         Span::styled(
                             if content.len() > 80 {
                                 format!("{}...", preview)
@@ -83,6 +107,10 @@ impl OutputPanel {
                 seq: _,
             } => {
                 let mut lines = vec![Line::from(vec![
+                    Span::styled(
+                        format!("{}", task_prefix),
+                        Style::default().fg(Color::DarkGray)
+                    ),
                     Span::styled("[", Style::default().fg(Color::DarkGray)),
                     Span::styled(tool_name.clone(), Style::default().fg(Color::Cyan)),
                     Span::styled("]", Style::default().fg(Color::DarkGray)),
@@ -97,16 +125,16 @@ impl OutputPanel {
                             MAX_TOOL_INPUT_LINES
                         };
 
-                        for (i, line) in input.lines().take(max_lines).enumerate() {
+                        for (_i, line) in input.lines().take(max_lines).enumerate() {
                             lines.push(Line::styled(
-                                format!("  {}", line),
+                                format!("{}  {}", task_prefix, line),
                                 Style::default().fg(Color::DarkGray),
                             ));
                         }
 
                         if input.lines().count() > max_lines {
                             lines.push(Line::styled(
-                                "  ...",
+                                format!("{}  ...", task_prefix),
                                 Style::default().fg(Color::DarkGray),
                             ));
                         }
@@ -126,6 +154,10 @@ impl OutputPanel {
                 let color = if *success { Color::Green } else { Color::Red };
 
                 let mut lines = vec![Line::from(vec![
+                    Span::styled(
+                        format!("{}", task_prefix),
+                        Style::default().fg(Color::DarkGray)
+                    ),
                     Span::styled("[", Style::default().fg(Color::DarkGray)),
                     Span::styled(tool_name.clone(), Style::default().fg(Color::Cyan)),
                     Span::styled("] ", Style::default().fg(Color::DarkGray)),
@@ -140,16 +172,16 @@ impl OutputPanel {
                         MAX_TOOL_RESULT_LINES
                     };
 
-                    for (i, line) in result.lines().take(max_lines).enumerate() {
+                    for (_i, line) in result.lines().take(max_lines).enumerate() {
                         lines.push(Line::styled(
-                            format!("  {}", line),
+                            format!("{}  {}", task_prefix, line),
                             Style::default().fg(Color::DarkGray),
                         ));
                     }
 
                     if result.lines().count() > max_lines {
                         lines.push(Line::styled(
-                            format!("  ... (+{} more lines)", result.lines().count() - max_lines),
+                            format!("{}  ... (+{} more lines)", task_prefix, result.lines().count() - max_lines),
                             Style::default().fg(Color::Yellow),
                         ));
                     }
@@ -163,10 +195,13 @@ impl OutputPanel {
                 seq: _,
             } => {
                 // Render result as markdown with limit
-                let mut lines = vec![Line::styled(
-                    "── Result ──",
-                    Style::default().fg(Color::Yellow),
-                )];
+                let mut lines = vec![Line::from(vec![
+                    Span::styled(
+                        format!("{}", task_prefix),
+                        Style::default().fg(Color::DarkGray)
+                    ),
+                    Span::styled("── Result ──", Style::default().fg(Color::Yellow)),
+                ])];
 
                 let max_lines = if verbosity >= VerbosityLevel::Verbose {
                     50
@@ -175,13 +210,19 @@ impl OutputPanel {
                 };
 
                 let md_lines = render_markdown(content, width);
-                for (i, md_line) in md_lines.iter().take(max_lines).enumerate() {
-                    lines.push(md_line.clone());
+                for (_i, md_line) in md_lines.iter().take(max_lines).enumerate() {
+                    let mut new_line = md_line.clone();
+                    // Prefix with task_id (as spacing)
+                    new_line.spans.insert(0, Span::styled(
+                        task_prefix.clone(),
+                        Style::default().fg(Color::DarkGray)
+                    ));
+                    lines.push(new_line);
                 }
 
                 if md_lines.len() > max_lines {
                     lines.push(Line::styled(
-                        format!("... (+{} more lines)", md_lines.len() - max_lines),
+                        format!("{}... (+{} more lines)", task_prefix, md_lines.len() - max_lines),
                         Style::default().fg(Color::Yellow),
                     ));
                 }

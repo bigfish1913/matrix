@@ -420,6 +420,161 @@ Respond with a brief summary of what you fixed."#,
         Ok(true)
     }
 
+    /// Verify that the project builds successfully (typecheck + build)
+    /// This ensures the generated code is executable, not just tests passing
+    pub async fn verify_build(&self, task: &mut Task) -> Result<(bool, String)> {
+        info!(task_id = %task.id, title = %task.title, "Verifying build");
+        self.emit_activity(Activity::Test);
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "⏳ Verifying build (typecheck + build)...".to_string(),
+        });
+
+        // Step 1: Run typecheck if available
+        let typecheck_result = self.run_command(&["npm", "run", "typecheck"], "typecheck").await;
+        let mut errors = Vec::new();
+
+        match typecheck_result {
+            Ok((success, output)) => {
+                if success {
+                    info!(task_id = %task.id, "Typecheck passed");
+                } else {
+                    warn!(task_id = %task.id, "Typecheck failed");
+                    errors.push(format!("TypeScript errors:\n{}", output));
+                }
+            }
+            Err(e) => {
+                // typecheck script might not exist, that's okay
+                info!(task_id = %task.id, "No typecheck script or error: {}", e);
+            }
+        }
+
+        // Step 2: Run build
+        let build_result = self.run_command(&["npm", "run", "build"], "build").await;
+
+        match build_result {
+            Ok((success, output)) => {
+                if success {
+                    info!(task_id = %task.id, "Build passed");
+                    if errors.is_empty() {
+                        self.emit_event(Event::TaskProgress {
+                            id: task.id.clone(),
+                            message: "✓ Build verification passed".to_string(),
+                        });
+                        return Ok((true, "Build verification passed".to_string()));
+                    }
+                } else {
+                    warn!(task_id = %task.id, "Build failed");
+                    errors.push(format!("Build errors:\n{}", output));
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Build command error: {}", e));
+            }
+        }
+
+        if errors.is_empty() {
+            // Neither typecheck nor build scripts exist
+            self.emit_event(Event::TaskProgress {
+                id: task.id.clone(),
+                message: "✓ No build scripts found, skipped".to_string(),
+            });
+            return Ok((true, "No build scripts found".to_string()));
+        }
+
+        let combined_errors = errors.join("\n\n");
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "✗ Build verification failed".to_string(),
+        });
+        Ok((false, combined_errors))
+    }
+
+    /// Run a command and return (success, output)
+    async fn run_command(&self, cmd: &[&str], name: &str) -> Result<(bool, String)> {
+        if cmd.is_empty() {
+            return Ok((true, format!("No {} command", name)));
+        }
+
+        let result = Command::new(cmd[0])
+            .args(&cmd[1..])
+            .current_dir(&self.workspace)
+            .output()
+            .await;
+
+        match result {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let combined = format!("{}\n{}", stdout, stderr);
+                Ok((output.status.success(), combined))
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    // Command not found, script might not exist
+                    Ok((true, format!("{} script not found", name)))
+                } else {
+                    Err(Error::TaskExecution(format!("{} failed: {}", name, e)))
+                }
+            }
+        }
+    }
+
+    /// Attempt to fix build/compilation errors
+    pub async fn fix_build_errors(&self, task: &mut Task, build_output: &str) -> Result<bool> {
+        info!(task_id = %task.id, title = %task.title, "Attempting to fix build errors");
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "🔧 Attempting to fix build errors...".to_string(),
+        });
+
+        let prompt = format!(
+            r#"You are a senior developer fixing compilation/build errors.
+
+TASK: {}
+DESCRIPTION: {}
+
+BUILD/COMPILATION ERRORS:
+{}
+
+CRITICAL INSTRUCTIONS:
+1. Fix ALL TypeScript/compilation errors shown above
+2. Common issues to check:
+   - Missing type definitions or method signatures
+   - Incorrect API usage (check library documentation)
+   - Type mismatches (null vs undefined, missing properties)
+   - Missing imports or exports
+3. Do NOT add placeholder implementations or TODOs
+4. Ensure the code compiles successfully
+
+Fix the errors. Make minimal, targeted changes.
+Respond with a brief summary of what you fixed."#,
+            task.title, task.description, build_output
+        );
+
+        let result = self
+            .runner
+            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .await?;
+
+        if result.is_error {
+            warn!(error = %result.text, "Fix attempt failed");
+            return Ok(false);
+        }
+
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: task.id.clone(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (build fix)");
+        }
+
+        info!(task_id = %task.id, title = %task.title, summary = %result.text, "Build fix applied");
+        Ok(true)
+    }
+
     // Helper methods
 
     fn build_execution_prompt(&self, task: &Task) -> String {

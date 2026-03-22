@@ -231,10 +231,18 @@ impl TasksPanel {
                     Span::styled(status_text, Style::default().fg(Color::DarkGray)),
                 ];
 
-                // Show dependency indicator if task has dependencies
+                // Show dependency indicator with count and task IDs
                 if !item.depends_on.is_empty() {
+                    let dep_count = item.depends_on.len();
+                    let deps_str = if dep_count <= 2 {
+                        // Show all dependency IDs if 2 or fewer
+                        format!(" ⬆{}[{}]", dep_count, item.depends_on.join(", "))
+                    } else {
+                        // Show count and first 2 IDs
+                        format!(" ⬆{}[{}, ...]", dep_count, item.depends_on[..2].join(", "))
+                    };
                     spans.push(Span::styled(
-                        format!(" ⬆{}", item.depends_on.len()),
+                        deps_str,
                         Style::default().fg(Color::Magenta),
                     ));
                 }
@@ -289,9 +297,16 @@ impl TasksPanel {
                     Span::styled(status_text, Style::default().fg(Color::DarkGray)),
                 ];
 
+                // Show dependency indicator with count and task IDs
                 if !task.depends_on.is_empty() {
+                    let dep_count = task.depends_on.len();
+                    let deps_str = if dep_count <= 2 {
+                        format!(" ⬆{}[{}]", dep_count, task.depends_on.join(", "))
+                    } else {
+                        format!(" ⬆{}[{}, ...]", dep_count, task.depends_on[..2].join(", "))
+                    };
                     spans.push(Span::styled(
-                        format!(" ⬆{}", task.depends_on.len()),
+                        deps_str,
                         Style::default().fg(Color::Magenta),
                     ));
                 }

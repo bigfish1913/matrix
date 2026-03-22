@@ -1233,28 +1233,9 @@ impl TuiApp {
                     self.add_output_line(task_id, line);
                 }
             }
-            Event::ClaudeRequest { task_id, prompt, model, timeout_secs } => {
-                // Show request summary in normal mode (full details in verbose)
-                let summary = if self.verbosity >= VerbosityLevel::Verbose {
-                    format!("{}\n\n{}",
-                        format!("═══════════════════════════════════════\n\
-                                 ═══ Claude Request ═══\n\
-                                 Model: {} | Timeout: {}s\n\
-                                 ═══════════════════════════════════════",
-                            model, timeout_secs),
-                        prompt)
-                } else {
-                    format!("[Claude Request] Model: {} | Timeout: {}s | Length: {} chars",
-                        model, timeout_secs, prompt.len())
-                };
-                let seq = self.output_seq_counter;
-                self.output_seq_counter += 1;
-                let line = OutputLine::Result {
-                    task_id: task_id.clone(),
-                    content: summary,
-                    seq,
-                };
-                self.add_output_line(task_id, line);
+            Event::ClaudeRequest { task_id: _, prompt: _, model: _, timeout_secs: _ } => {
+                // Request logs removed - only show Claude responses, not requests
+                // This keeps the output panel clean and focused on actual output
             }
             Event::ClaudeResult { task_id, result } => {
                 // Show Claude response in normal mode (not just verbose)
