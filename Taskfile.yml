@@ -2,96 +2,289 @@ version: "3"
 
 vars:
   BINARY_NAME: matrix
-  INSTALL_DIR: /usr/local/bin
+  VERSION:
+    sh: cargo pkgid -p matrix-cli 2>/dev/null | sed 's/.*#//' | sed 's/.*@//' || echo "dev"
 
 tasks:
   default:
-    desc: 显示帮助信息
+    desc: Show help
     cmds:
       - task --list
 
   build:
-    desc: 构建所有 workspace crates
+    desc: Build all workspace crates
     cmds:
       - cargo build --workspace --release
 
   dev:
-    desc: 开发模式构建
+    desc: Build in dev mode
     cmds:
       - cargo build --workspace
 
   test:
-    desc: 运行所有测试
+    desc: Run all tests
     cmds:
       - cargo test --workspace
 
   test-single:
-    desc: 运行单个测试
+    desc: Run single test
     vars:
       TEST_NAME: ""
     cmds:
       - cargo test --workspace "{{.TEST_NAME}}"
 
   run:
-    desc: 运行 CLI
+    desc: Run CLI
     vars:
-      GOAL: "测试项目"
+      GOAL: "test project"
     cmds:
       - cargo run -p matrix-cli -- "{{.GOAL}}"
 
   install:
-    desc: 一键安装到全局
+    desc: Install to user directory (~/.local/bin)
     cmds:
       - cargo build -p matrix-cli --release
-      - cmd: powershell -Command "New-Item -ItemType Directory -Force -Path $HOME/.local/bin; Copy-Item target/release/matrix.exe -Destination $HOME/.local/bin/matrix.exe -Force; Write-Host \"Installed matrix.exe v{{.VERSION}} to ~/.local/bin/\""
-        platforms: [windows]
-      - cmd: |
-          mkdir -p ~/.local/bin
-          cp target/release/matrix ~/.local/bin/matrix
-          chmod +x ~/.local/bin/matrix 2>/dev/null || true
-          echo "Installed matrix v{{.VERSION}} to ~/.local/bin/"
-        platforms: [linux, darwin]
-    vars:
-      VERSION:
-        sh: cargo pkgid -p matrix-cli | sed 's/.*#//' | sed 's/.*@//'
+      - |
+        binDir="$HOME/.local/bin"
+        mkdir -p "$binDir"
+        if [ -f target/release/matrix.exe ]; then
+          cp target/release/matrix.exe "$binDir/matrix.exe"
+        else
+          cp target/release/matrix "$binDir/matrix"
+        fi
+        chmod +x "$binDir"/matrix* 2>/dev/null || true
+        echo ""
+        echo "Installed matrix v{{.VERSION}} to $binDir"
+        echo ""
+        if ! echo "$PATH" | grep -q "$binDir"; then
+          echo "Add ~/.local/bin to your PATH:"
+          echo "  export PATH=\"$HOME/.local/bin:\$PATH\""
+          echo ""
+        fi
 
-  install-local:
-    desc: 安装到用户目录
+  install-system:
+    desc: Install to system directory
     cmds:
       - cargo build -p matrix-cli --release
-      - cmd: powershell -Command "New-Item -ItemType Directory -Force -Path $HOME/.local/bin; Copy-Item target/release/matrix.exe -Destination $HOME/.local/bin/matrix.exe -Force; Write-Host \"Installed matrix.exe v{{.VERSION}} to ~/.local/bin/\""
+      - cmd: |
+          binDir="$HOME/.local/bin"
+          mkdir -p "$binDir"
+          if [ -f target/release/matrix.exe ]; then
+            cp target/release/matrix.exe "$binDir/matrix.exe"
+          else
+            cp target/release/matrix "$binDir/matrix"
+          fi
+          chmod +x "$binDir"/matrix* 2>/dev/null || true
+          echo ""
+          echo "Installed matrix v{{.VERSION}} to $binDir"
+          echo ""
         platforms: [windows]
       - cmd: |
-          mkdir -p ~/.local/bin
-          cp target/release/matrix ~/.local/bin/matrix
-          chmod +x ~/.local/bin/matrix 2>/dev/null || true
-          echo "Installed matrix v{{.VERSION}} to ~/.local/bin/"
+          set -e
+          binDir="/usr/local/bin"
+          echo "Installing matrix v{{.VERSION}} to $binDir ..."
+          sudo mkdir -p "$binDir"
+          sudo cp target/release/matrix "$binDir/matrix"
+          sudo chmod +x "$binDir/matrix"
+          echo ""
+          echo "Installed matrix v{{.VERSION}} to $binDir"
+          if command -v matrix &> /dev/null; then
+            echo "matrix is available in PATH"
+            matrix --version 2>/dev/null || true
+          fi
         platforms: [linux, darwin]
-    vars:
-      VERSION:
-        sh: cargo pkgid -p matrix-cli | sed 's/.*#//' | sed 's/.*@//'
+
+  uninstall:
+    desc: Uninstall matrix
+    cmds:
+      - cmd: |
+          rm -f "$HOME/.local/bin/matrix.exe" 2>/dev/null || true
+          rm -f "$HOME/.local/bin/matrix" 2>/dev/null || true
+          echo "matrix has been uninstalled"
+        platforms: [windows]
+      - cmd: |
+          rm -f "$HOME/.local/bin/matrix" 2>/dev/null || true
+          sudo rm -f "/usr/local/bin/matrix" 2>/dev/null || true
+          echo "matrix has been uninstalled"
+        platforms: [linux, darwin]
 
   clean:
-    desc: 清理构建产物
+    desc: Clean build artifacts
     cmds:
       - cargo clean
 
   fmt:
-    desc: 格式化代码
+    desc: Format code
     cmds:
       - cargo fmt --all
 
   lint:
-    desc: 运行 clippy 检查
+    desc: Run clippy
     cmds:
       - cargo clippy --workspace --all-targets -- -D warnings
 
   check:
-    desc: 检查代码
+    desc: Check code
     cmds:
       - cargo check --workspace
 
   watch:
-    desc: 监听文件变化
+    desc: Watch for changes
     cmds:
       - cargo watch -x "build --workspace"
+
+  release:
+    desc: Build release binary
+    cmds:
+      - cargo build -p matrix-cli --release
+      - |
+        mkdir -p dist
+        if [ -f target/release/matrix.exe ]; then
+          cp target/release/matrix.exe "dist/matrix-{{.VERSION}}-windows-x86_64.exe"
+          echo "Built dist/matrix-{{.VERSION}}-windows-x86_64.exe"
+        else
+          arch=$(uname -m)
+          if [ "$(uname)" = "Darwin" ]; then
+            cp target/release/matrix "dist/matrix-{{.VERSION}}-macos-$arch"
+            echo "Built dist/matrix-{{.VERSION}}-macos-$arch"
+          else
+            cp target/release/matrix "dist/matrix-{{.VERSION}}-linux-$arch"
+            echo "Built dist/matrix-{{.VERSION}}-linux-$arch"
+          fi
+        fi
+
+  version:
+    desc: Show current version
+    cmds:
+      - |
+        echo "Current version: v{{.VERSION}}"
+
+  bump-patch:
+    desc: Bump patch version (x.x.Z)
+    cmds:
+      - cargo set-version --bump patch
+      - task: version
+
+  bump-minor:
+    desc: Bump minor version (x.Y.0)
+    cmds:
+      - cargo set-version --bump minor
+      - task: version
+
+  bump-major:
+    desc: Bump major version (X.0.0)
+    cmds:
+      - cargo set-version --bump major
+      - task: version
+
+  set-version:
+    desc: Set specific version (task set-version VERSION=1.2.3)
+    vars:
+      VERSION: ""
+    cmds:
+      - |
+        if [ -z "{{.VERSION}}" ]; then
+          echo "Error: Please specify version"
+          echo "Usage: task set-version VERSION=1.2.3"
+          exit 1
+        fi
+        cargo set-version "{{.VERSION}}"
+        echo "Version set to {{.VERSION}}"
+
+  changelog:
+    desc: Generate changelog
+    cmds:
+      - |
+        echo "=== Changelog ==="
+        echo ""
+        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        if [ -n "$LAST_TAG" ]; then
+          echo "Changes since $LAST_TAG:"
+          echo ""
+          git log --pretty=format:"- %s (%h)" $LAST_TAG..HEAD
+        else
+          echo "All changes:"
+          git log --pretty=format:"- %s (%h)" -20
+        fi
+        echo ""
+
+  check-clean:
+    desc: Check if working directory is clean
+    internal: true
+    cmds:
+      - |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "Error: Working directory has uncommitted changes"
+          echo ""
+          git status --short
+          echo ""
+          echo "Please commit or stash these changes first"
+          exit 1
+        fi
+
+  publish:
+    desc: Publish new version (task publish VERSION=1.0.0)
+    vars:
+      VERSION: ""
+    cmds:
+      - task: check-clean
+      - task: test
+      - task: lint
+      - |
+        if [ -z "{{.VERSION}}" ]; then
+          echo "Error: Please specify version"
+          echo "Usage: task publish VERSION=1.0.0"
+          exit 1
+        fi
+        echo ""
+        echo "Preparing release v{{.VERSION}}"
+        echo ""
+      - task: set-version
+        vars:
+          VERSION: "{{.VERSION}}"
+      - task: changelog
+      - |
+        echo ""
+        echo "Committing version change..."
+        git add -A
+        git commit -m "chore: bump version to v{{.VERSION}}"
+        echo ""
+        echo "Creating tag v{{.VERSION}}..."
+        git tag -a "v{{.VERSION}}" -m "Release v{{.VERSION}}"
+        echo ""
+        echo "Pushing to remote..."
+        git push origin main
+        git push origin "v{{.VERSION}}"
+        echo ""
+        echo "Release complete!"
+        echo ""
+        echo "GitHub Actions will build and create Release:"
+        echo "  https://github.com/bigfish1913/matrix/actions"
+        echo ""
+
+  publish-patch:
+    desc: Publish patch version (auto bump x.x.Z)
+    cmds:
+      - task: check-clean
+      - task: test
+      - task: lint
+      - task: bump-patch
+      - |
+        NEW_VERSION=$(cargo pkgid -p matrix-cli 2>/dev/null | sed 's/.*#//' | sed 's/.*@//')
+        echo ""
+        echo "Committing version change..."
+        git add -A
+        git commit -m "chore: bump version to v$NEW_VERSION"
+        echo ""
+        echo "Creating tag v$NEW_VERSION..."
+        git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+        echo ""
+        echo "Pushing to remote..."
+        git push origin main
+        git push origin "v$NEW_VERSION"
+        echo ""
+        echo "Release v$NEW_VERSION complete!"
+        echo ""
+        echo "GitHub Actions will build and create Release:"
+        echo "  https://github.com/bigfish1913/matrix/actions"
+        echo ""

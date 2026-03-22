@@ -275,6 +275,71 @@ impl OutputLine {
             OutputLine::Result { seq, .. } => *seq,
         }
     }
+
+    /// Calculate how many rendered lines this OutputLine expands to
+    /// This approximates the actual rendering logic in OutputPanel
+    pub fn rendered_line_count(&self, verbosity: VerbosityLevel) -> usize {
+        match self {
+            OutputLine::Thinking { content, .. } => {
+                if verbosity >= VerbosityLevel::Verbose {
+                    // Markdown rendered, approximate by counting newlines + 1
+                    content.lines().count().max(1)
+                } else {
+                    // Single line with preview
+                    1
+                }
+            }
+            OutputLine::ToolUse { tool_input, .. } => {
+                let mut count = 1; // Header line
+                if let Some(input) = tool_input {
+                    if !input.is_empty() {
+                        let lines = input.lines().count();
+                        let max_lines = if verbosity >= VerbosityLevel::Verbose {
+                            lines
+                        } else {
+                            2 // MAX_TOOL_INPUT_LINES
+                        };
+                        count += lines.min(max_lines);
+                        if lines > max_lines {
+                            count += 1; // "..." line
+                        }
+                    }
+                }
+                count
+            }
+            OutputLine::ToolResult { result, .. } => {
+                let mut count = 1; // Header line
+                if !result.is_empty() {
+                    let lines = result.lines().count();
+                    let max_lines = if verbosity >= VerbosityLevel::Verbose {
+                        50
+                    } else {
+                        5 // MAX_TOOL_RESULT_LINES
+                    };
+                    count += lines.min(max_lines);
+                    if lines > max_lines {
+                        count += 1; // "... (+N more lines)" line
+                    }
+                }
+                count
+            }
+            OutputLine::Result { content, .. } => {
+                let mut count = 1; // Header line
+                // Approximate markdown rendering
+                let lines = content.lines().count();
+                let max_lines = if verbosity >= VerbosityLevel::Verbose {
+                    50
+                } else {
+                    10 // MAX_RESULT_LINES
+                };
+                count += lines.min(max_lines);
+                if lines > max_lines {
+                    count += 1; // "... (+N more lines)" line
+                }
+                count
+            }
+        }
+    }
 }
 
 /// Main TUI application state
@@ -320,6 +385,7 @@ pub struct TuiApp {
     // Claude output (per-task storage)
     pub output_by_task: HashMap<String, Vec<OutputLine>>,
     pub output_lines: Vec<OutputLine>, // All output (current view)
+    pub output_rendered_lines: usize,  // Actual rendered line count (expanded from OutputLine)
     pub output_scroll: usize,
     pub output_task_id: Option<String>, // Currently viewed task output
     pub output_auto_follow: bool,       // Auto-scroll to bottom on new output
@@ -392,6 +458,7 @@ impl TuiApp {
             task_detail: TaskDetailState::default(),
             output_by_task: HashMap::new(),
             output_lines: Vec::new(),
+            output_rendered_lines: 0,
             output_scroll: 0,
             output_task_id: None,
             output_auto_follow: true,
@@ -461,6 +528,15 @@ impl TuiApp {
         self.questions.get(selected)
     }
 
+    /// Update the rendered line count based on current output_lines
+    fn update_output_rendered_count(&mut self) {
+        self.output_rendered_lines = self
+            .output_lines
+            .iter()
+            .map(|line| line.rendered_line_count(self.verbosity))
+            .sum();
+    }
+
     /// Switch output view to specific task
     pub fn switch_output_to_task(&mut self, task_id: &str) {
         self.output_task_id = Some(task_id.to_string());
@@ -469,6 +545,7 @@ impl TuiApp {
         } else {
             self.output_lines.clear();
         }
+        self.update_output_rendered_count();
         self.output_scroll = 0;
         self.output_auto_follow = true;
     }
@@ -484,6 +561,7 @@ impl TuiApp {
         // Sort by sequence number to maintain chronological order
         all_lines.sort_by_key(|line| line.seq());
         self.output_lines = all_lines;
+        self.update_output_rendered_count();
         self.output_scroll = 0;
         self.output_auto_follow = true;
     }
@@ -508,12 +586,19 @@ impl TuiApp {
         let should_add_to_view =
             self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id);
         if should_add_to_view {
+            // Get the rendered line count before adding
+            let added_count = line.rendered_line_count(self.verbosity);
             self.output_lines.push(line.clone());
             // Trim current view if needed
             if self.output_lines.len() > self.max_output_lines {
                 let remove_count = self.output_lines.len() - self.max_output_lines;
-                self.output_lines.drain(0..remove_count);
+                // Subtract the rendered count of removed lines
+                for removed in self.output_lines.drain(0..remove_count) {
+                    self.output_rendered_lines -= removed.rendered_line_count(self.verbosity);
+                }
             }
+            // Add the new line's rendered count
+            self.output_rendered_lines += added_count;
         }
 
         // Auto-scroll to bottom if auto_follow is enabled and viewing the matching task or all
@@ -784,11 +869,13 @@ impl TuiApp {
                     // Scroll down
                     let delta_abs = (-delta) as u16;
                     let entries = self.log_buffer.get_entries();
-                    let max_scroll = entries.len() as u16;
+                    let max_scroll = entries
+                        .len()
+                        .saturating_sub(self.logs_viewport_height as usize)
+                        as u16;
                     self.logs_scroll = (self.logs_scroll + delta_abs).min(max_scroll);
-                    // Only re-enable auto-follow if content exceeds assumed viewport height
-                    // This prevents "jump to top" when content is short
-                    if max_scroll > 15 && self.logs_scroll >= max_scroll.saturating_sub(5) {
+                    // Re-enable auto-follow if scrolled to bottom
+                    if max_scroll > 0 && self.logs_scroll >= max_scroll.saturating_sub(1) {
                         self.logs_auto_follow = true;
                     }
                 }
@@ -809,7 +896,7 @@ impl TuiApp {
                     self.output_auto_follow = false;
                 } else {
                     let delta_abs = (-delta) as usize;
-                    let max_scroll = self.output_lines.len();
+                    let max_scroll = self.output_rendered_lines;
                     self.output_scroll = (self.output_scroll + delta_abs).min(max_scroll);
                     // Re-enable auto-follow if scrolled to bottom
                     if self.output_scroll >= max_scroll.saturating_sub(5) {
@@ -1107,7 +1194,7 @@ impl TuiApp {
                 }
             }
             Tab::Output => {
-                let max_scroll = self.output_lines.len();
+                let max_scroll = self.output_rendered_lines;
                 if self.output_scroll < max_scroll {
                     self.output_scroll = self.output_scroll.saturating_add(1);
                 }

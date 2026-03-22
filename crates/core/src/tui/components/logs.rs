@@ -121,7 +121,6 @@ impl LogsPanel {
 
         Paragraph::new(lines)
             .block(Block::default().title(" Logs ").borders(Borders::ALL))
-            .wrap(Wrap { trim: false })
             .scroll((scroll_offset, 0))
     }
 

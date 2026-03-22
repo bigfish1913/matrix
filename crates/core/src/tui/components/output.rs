@@ -35,7 +35,6 @@ impl OutputPanel {
 
         Paragraph::new(text_lines)
             .block(Block::default().title(title).borders(Borders::ALL))
-            .wrap(Wrap { trim: false })
             .scroll((scroll as u16, 0))
     }
 

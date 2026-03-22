@@ -61,9 +61,9 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         }
         Tab::Output => {
             // Render output content directly (no task tabs)
-            let viewport_height = chunks[1].height.saturating_sub(2) as usize;
             let scroll = if app.output_auto_follow {
-                app.output_lines.len().saturating_sub(viewport_height)
+                // Use MAX to scroll to bottom - the paragraph will clamp it
+                usize::MAX
             } else {
                 app.output_scroll
             };
