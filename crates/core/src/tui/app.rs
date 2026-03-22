@@ -1239,14 +1239,11 @@ impl TuiApp {
             }
             Event::ClaudeResult { task_id, result } => {
                 // Show Claude response in normal mode (not just verbose)
-                let header = "═══════════════════════════════════════\n\
-                              ═══ Claude Response ═══\n\
-                              ═══════════════════════════════════════";
                 let seq = self.output_seq_counter;
                 self.output_seq_counter += 1;
                 let line = OutputLine::Result {
                     task_id: task_id.clone(),
-                    content: format!("{}\n\n{}", header, result),
+                    content: format!("\n{}", result),
                     seq,
                 };
                 self.add_output_line(task_id, line);

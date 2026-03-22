@@ -259,6 +259,9 @@ impl Orchestrator {
         // Ensure .gitignore exists
         self.ensure_gitignore().await?;
 
+        // Initialize git repository if not exists
+        self.init_git_repository().await?;
+
         // Load any pending questions from previous run (for info only)
         let pending = self.question_store.pending_questions().await?;
         if !pending.is_empty() {
@@ -343,6 +346,56 @@ impl Orchestrator {
         if !gitignore.exists() {
             fs::write(&gitignore, DEFAULT_GITIGNORE).await?;
         }
+        Ok(())
+    }
+
+    /// Initialize git repository if it doesn't exist
+    async fn init_git_repository(&self) -> Result<()> {
+        let git_dir = self.config.workspace.join(".git");
+        if git_dir.exists() {
+            debug!("Git repository already exists");
+            return Ok(());
+        }
+
+        info!("Initializing git repository...");
+
+        // Run git init
+        let output = tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&self.config.workspace)
+            .output()
+            .await
+            .map_err(|e| Error::Git(format!("Failed to init git: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(stderr = %stderr, "Git init failed");
+            return Err(Error::Git(format!("Git init failed: {}", stderr)));
+        }
+
+        info!("Git repository initialized");
+
+        // Create initial commit with .gitignore
+        let gitignore = self.config.workspace.join(".gitignore");
+        if gitignore.exists() {
+            // Stage .gitignore
+            let _ = tokio::process::Command::new("git")
+                .args(["add", ".gitignore"])
+                .current_dir(&self.config.workspace)
+                .output()
+                .await;
+
+            // Create initial commit
+            let initial_message = "[init] Initial project setup with .gitignore\n\nInitialized by Matrix orchestrator";
+            let _ = tokio::process::Command::new("git")
+                .args(["commit", "-m", initial_message])
+                .current_dir(&self.config.workspace)
+                .output()
+                .await;
+
+            info!("Created initial commit with .gitignore");
+        }
+
         Ok(())
     }
 
@@ -1080,40 +1133,94 @@ OR if splitting needed:
 
     /// Phase 4: Git commit for completed task
     pub async fn git_commit_task(&self, task: &Task) -> Result<()> {
-        if task.modified_files.is_empty() {
-            debug!(task_id = %task.id, "No files to commit");
-            return Ok(());
-        }
-
-        info!(task_id = %task.id, files = ?task.modified_files, "Committing changes");
+        info!(task_id = %task.id, "Preparing git commit for completed task");
 
         // Check if git is initialized
         let git_dir = self.config.workspace.join(".git");
         if !git_dir.exists() {
-            let output = tokio::process::Command::new("git")
-                .args(["init"])
-                .current_dir(&self.config.workspace)
-                .output()
-                .await
-                .map_err(|e| Error::Git(format!("Failed to init git: {}", e)))?;
+            warn!("Git not initialized, skipping commit");
+            return Ok(());
+        }
 
-            if !output.status.success() {
-                warn!("Git init failed, skipping commit");
-                return Ok(());
+        // Stage all changes (using git add -A to catch all modifications)
+        let add_output = tokio::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&self.config.workspace)
+            .output()
+            .await
+            .map_err(|e| Error::Git(format!("Failed to stage files: {}", e)))?;
+
+        if !add_output.status.success() {
+            let stderr = String::from_utf8_lossy(&add_output.stderr);
+            warn!(stderr = %stderr, "Git add failed");
+        }
+
+        // Check if there are changes to commit
+        let status_output = tokio::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&self.config.workspace)
+            .output()
+            .await
+            .map_err(|e| Error::Git(format!("Failed to check git status: {}", e)))?;
+
+        let status_stdout = String::from_utf8_lossy(&status_output.stdout);
+        if status_stdout.trim().is_empty() {
+            debug!(task_id = %task.id, "No changes to commit");
+            return Ok(());
+        }
+
+        // Build detailed commit message
+        let mut message_lines = vec![
+            format!("[{}] {}", task.id, task.title),
+            String::new(),
+            format!("Task ID: {}", task.id),
+            format!("Title: {}", task.title),
+        ];
+
+        // Add description (truncate if too long)
+        if !task.description.is_empty() {
+            let desc_preview = if task.description.len() > 500 {
+                format!("{}...", &task.description[..500])
+            } else {
+                task.description.clone()
+            };
+            message_lines.push(String::new());
+            message_lines.push("Description:".to_string());
+            for line in desc_preview.lines().take(20) {
+                message_lines.push(format!("  {}", line));
             }
         }
 
-        // Stage files
-        for file in &task.modified_files {
-            let _ = tokio::process::Command::new("git")
-                .args(["add", file])
-                .current_dir(&self.config.workspace)
-                .output()
-                .await;
+        // Add modified files summary
+        if !task.modified_files.is_empty() {
+            message_lines.push(String::new());
+            message_lines.push(format!("Modified files ({}):", task.modified_files.len()));
+            for file in task.modified_files.iter().take(20) {
+                message_lines.push(format!("  - {}", file));
+            }
+            if task.modified_files.len() > 20 {
+                message_lines.push(format!("  ... and {} more files", task.modified_files.len() - 20));
+            }
         }
 
+        // Add result summary if available
+        if let Some(ref result) = task.result {
+            if !result.is_empty() && result.len() < 500 {
+                message_lines.push(String::new());
+                message_lines.push("Result:".to_string());
+                for line in result.lines().take(10) {
+                    message_lines.push(format!("  {}", line));
+                }
+            }
+        }
+
+        // Add footer
+        message_lines.push(String::new());
+        message_lines.push("Co-Authored-By: Matrix Orchestrator <matrix@agent.dev>".to_string());
+
+        let message = message_lines.join("\n");
+
         // Create commit
-        let message = format!("[{}] {}", task.id, task.title);
         let output = tokio::process::Command::new("git")
             .args(["commit", "-m", &message])
             .current_dir(&self.config.workspace)
@@ -1122,10 +1229,28 @@ OR if splitting needed:
             .map_err(|e| Error::Git(format!("Failed to commit: {}", e)))?;
 
         if output.status.success() {
-            info!(task_id = %task.id, "Changes committed");
+            // Get commit hash
+            let hash_output = tokio::process::Command::new("git")
+                .args(["rev-parse", "--short", "HEAD"])
+                .current_dir(&self.config.workspace)
+                .output()
+                .await;
+
+            let commit_hash = hash_output
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            info!(task_id = %task.id, commit = %commit_hash, "Changes committed successfully");
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!(stderr = %stderr, "Commit had issues");
+            // Check if it's just "nothing to commit"
+            if stderr.contains("nothing to commit") {
+                debug!(task_id = %task.id, "No changes to commit");
+            } else {
+                warn!(stderr = %stderr, "Commit had issues");
+            }
         }
 
         Ok(())
@@ -1397,9 +1522,10 @@ OR if splitting needed:
                 let executor = self.executor.clone();
                 let task = task.clone();
                 let event_sender = self.config.event_sender.clone();
+                let workspace = self.config.workspace.clone();
 
                 join_set.spawn(async move {
-                    let result = run_task_pipeline(store, executor, task.clone(), event_sender).await;
+                    let result = run_task_pipeline(store, executor, task.clone(), event_sender, workspace).await;
                     (task_id, 0usize, result.ok().flatten())
                 });
             }
@@ -1420,9 +1546,10 @@ OR if splitting needed:
                 let executor = self.executor.clone();
                 let task = task.clone();
                 let event_sender = self.config.event_sender.clone();
+                let workspace = self.config.workspace.clone();
 
                 join_set.spawn(async move {
-                    let result = run_task_pipeline(store, executor, task.clone(), event_sender).await;
+                    let result = run_task_pipeline(store, executor, task.clone(), event_sender, workspace).await;
                     (task_id, 1usize, result.ok().flatten())
                 });
             }
@@ -1663,6 +1790,7 @@ async fn run_task_pipeline(
     executor: Arc<TaskExecutor>,
     mut task: Task,
     event_sender: Option<EventSender>,
+    workspace: PathBuf,
 ) -> Result<Option<Task>> {
     let thread_name = format!("thread-{}", task.id);
 
@@ -1917,6 +2045,11 @@ async fn run_task_pipeline(
     }
     info!(task_id = %task.id, "Task completed successfully");
 
+    // Git commit for completed task
+    if let Err(e) = git_commit_task(&workspace, &task).await {
+        warn!(task_id = %task.id, error = %e, "Git commit failed");
+    }
+
     // Emit Completed status
     if let Some(ref sender) = event_sender {
         let _ = sender.send(Event::TaskStatusChanged {
@@ -1926,6 +2059,131 @@ async fn run_task_pipeline(
     }
 
     Ok(Some(task))
+}
+
+/// Git commit for a completed task with detailed commit message
+async fn git_commit_task(workspace: &std::path::Path, task: &Task) -> Result<()> {
+    info!(task_id = %task.id, "Preparing git commit for completed task");
+
+    // Check if git is initialized
+    let git_dir = workspace.join(".git");
+    if !git_dir.exists() {
+        warn!("Git not initialized, skipping commit");
+        return Ok(());
+    }
+
+    // Stage all changes (using git add -A to catch all modifications)
+    let add_output = tokio::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(workspace)
+        .output()
+        .await
+        .map_err(|e| Error::Git(format!("Failed to stage files: {}", e)))?;
+
+    if !add_output.status.success() {
+        let stderr = String::from_utf8_lossy(&add_output.stderr);
+        warn!(stderr = %stderr, "Git add failed");
+    }
+
+    // Check if there are changes to commit
+    let status_output = tokio::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workspace)
+        .output()
+        .await
+        .map_err(|e| Error::Git(format!("Failed to check git status: {}", e)))?;
+
+    let status_stdout = String::from_utf8_lossy(&status_output.stdout);
+    if status_stdout.trim().is_empty() {
+        debug!(task_id = %task.id, "No changes to commit");
+        return Ok(());
+    }
+
+    // Build detailed commit message
+    let mut message_lines = vec![
+        format!("[{}] {}", task.id, task.title),
+        String::new(),
+        format!("Task ID: {}", task.id),
+        format!("Title: {}", task.title),
+    ];
+
+    // Add description (truncate if too long)
+    if !task.description.is_empty() {
+        let desc_preview = if task.description.len() > 500 {
+            format!("{}...", &task.description[..500])
+        } else {
+            task.description.clone()
+        };
+        message_lines.push(String::new());
+        message_lines.push("Description:".to_string());
+        for line in desc_preview.lines().take(20) {
+            message_lines.push(format!("  {}", line));
+        }
+    }
+
+    // Add modified files info
+    if !task.modified_files.is_empty() {
+        message_lines.push(String::new());
+        message_lines.push(format!("Modified files ({}):", task.modified_files.len()));
+        for file in task.modified_files.iter().take(10) {
+            message_lines.push(format!("  - {}", file));
+        }
+        if task.modified_files.len() > 10 {
+            message_lines.push(format!("  ... and {} more files", task.modified_files.len() - 10));
+        }
+    }
+
+    // Add result summary if available
+    if let Some(ref result) = task.result {
+        if !result.is_empty() && result.len() < 500 {
+            message_lines.push(String::new());
+            message_lines.push("Result:".to_string());
+            for line in result.lines().take(10) {
+                message_lines.push(format!("  {}", line));
+            }
+        }
+    }
+
+    // Add footer
+    message_lines.push(String::new());
+    message_lines.push("Co-Authored-By: Matrix Orchestrator <matrix@agent.dev>".to_string());
+
+    let message = message_lines.join("\n");
+
+    // Create commit
+    let output = tokio::process::Command::new("git")
+        .args(["commit", "-m", &message])
+        .current_dir(workspace)
+        .output()
+        .await
+        .map_err(|e| Error::Git(format!("Failed to commit: {}", e)))?;
+
+    if output.status.success() {
+        // Get commit hash
+        let hash_output = tokio::process::Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(workspace)
+            .output()
+            .await;
+
+        let commit_hash = hash_output
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        info!(task_id = %task.id, commit = %commit_hash, "Changes committed successfully");
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Check if it's just "nothing to commit"
+        if stderr.contains("nothing to commit") || stderr.contains("nothing added") {
+            debug!(task_id = %task.id, "No changes to commit");
+        } else {
+            warn!(stderr = %stderr, "Commit had issues");
+        }
+    }
+
+    Ok(())
 }
 
 fn format_duration(d: Duration) -> String {
