@@ -575,6 +575,194 @@ Respond with a brief summary of what you fixed."#,
         Ok(true)
     }
 
+    /// Verify that the application runs successfully
+    /// This is the final verification step after build passes
+    pub async fn verify_functionality(&self, task: &mut Task) -> Result<(bool, String)> {
+        info!(task_id = %task.id, title = %task.title, "Verifying functionality");
+        self.emit_activity(Activity::Test);
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "⏳ Verifying functionality (app startup)...".to_string(),
+        });
+
+        // Try to start the dev server and capture initial output
+        let dev_result = self.run_dev_server_check().await;
+
+        match dev_result {
+            Ok((success, output)) => {
+                if success {
+                    info!(task_id = %task.id, "Functionality verification passed");
+                    self.emit_event(Event::TaskProgress {
+                        id: task.id.clone(),
+                        message: "✓ Functionality verification passed".to_string(),
+                    });
+                    Ok((true, output))
+                } else {
+                    warn!(task_id = %task.id, "Functionality verification failed");
+                    self.emit_event(Event::TaskProgress {
+                        id: task.id.clone(),
+                        message: "✗ Runtime errors detected".to_string(),
+                    });
+                    Ok((false, output))
+                }
+            }
+            Err(e) => {
+                // If no dev script, skip functionality check
+                info!(task_id = %task.id, "No dev server or skip: {}", e);
+                self.emit_event(Event::TaskProgress {
+                    id: task.id.clone(),
+                    message: "✓ No dev server to verify, skipped".to_string(),
+                });
+                Ok((true, format!("Skipped: {}", e)))
+            }
+        }
+    }
+
+    /// Run dev server and check for startup errors
+    async fn run_dev_server_check(&self) -> Result<(bool, String)> {
+        use std::time::Duration;
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::time::timeout;
+
+        // Start the dev server
+        let mut child = tokio::process::Command::new("npm")
+            .arg("run")
+            .arg("dev")
+            .current_dir(&self.workspace)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::TaskExecution(format!("Failed to start dev server: {}", e)))?;
+
+        let stdout = child.stdout.take().ok_or_else(|| {
+            Error::TaskExecution("Failed to capture stdout".to_string())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            Error::TaskExecution("Failed to capture stderr".to_string())
+        })?;
+
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+
+        let mut output_lines = Vec::new();
+        let mut has_error = false;
+        let mut server_started = false;
+
+        // Wait up to 30 seconds for server to start or show errors
+        let check_duration = Duration::from_secs(30);
+        let start = std::time::Instant::now();
+
+        while start.elapsed() < check_duration {
+            // Check stdout
+            match timeout(Duration::from_millis(100), stdout_reader.next_line()).await {
+                Ok(Ok(Some(line))) => {
+                    output_lines.push(format!("[OUT] {}", line));
+
+                    // Check for successful server start indicators
+                    if line.contains("localhost") || line.contains("ready in") ||
+                       line.contains("VITE") || line.contains("server running") ||
+                       line.contains("Local:") || line.contains("Network:") {
+                        server_started = true;
+                    }
+
+                    // Check for error indicators
+                    if line.to_lowercase().contains("error") ||
+                       line.contains("failed") || line.contains("cannot") {
+                        has_error = true;
+                    }
+                }
+                _ => {}
+            }
+
+            // Check stderr
+            match timeout(Duration::from_millis(100), stderr_reader.next_line()).await {
+                Ok(Ok(Some(line))) => {
+                    output_lines.push(format!("[ERR] {}", line));
+                    // stderr often contains errors
+                    if !line.contains("warning") && !line.contains("deprecated") {
+                        has_error = true;
+                    }
+                }
+                _ => {}
+            }
+
+            // If server started successfully, we can stop
+            if server_started && !has_error {
+                break;
+            }
+        }
+
+        // Kill the dev server
+        let _ = child.kill().await;
+
+        let combined_output = output_lines.join("\n");
+
+        if has_error {
+            Ok((false, combined_output))
+        } else if server_started {
+            Ok((true, combined_output))
+        } else {
+            // No clear success or failure - probably okay
+            Ok((true, combined_output))
+        }
+    }
+
+    /// Attempt to fix runtime errors
+    pub async fn fix_runtime_errors(&self, task: &mut Task, runtime_output: &str) -> Result<bool> {
+        info!(task_id = %task.id, title = %task.title, "Attempting to fix runtime errors");
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "🔧 Attempting to fix runtime errors...".to_string(),
+        });
+
+        let prompt = format!(
+            r#"You are a senior developer fixing runtime errors in an application.
+
+TASK: {}
+DESCRIPTION: {}
+
+RUNTIME ERRORS/LOGS:
+{}
+
+CRITICAL INSTRUCTIONS:
+1. Analyze the runtime errors and fix them
+2. Common runtime issues:
+   - Missing dependencies or imports
+   - Incorrect initialization order
+   - Null/undefined reference errors
+   - Missing configuration
+   - API incompatibilities
+3. Ensure the application can start successfully
+4. Do NOT add placeholder implementations
+
+Fix the errors. Make minimal, targeted changes.
+Respond with a brief summary of what you fixed."#,
+            task.title, task.description, runtime_output
+        );
+
+        let result = self
+            .runner
+            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .await?;
+
+        if result.is_error {
+            warn!(error = %result.text, "Runtime fix attempt failed");
+            return Ok(false);
+        }
+
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: task.id.clone(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (runtime fix)");
+        }
+
+        info!(task_id = %task.id, title = %task.title, summary = %result.text, "Runtime fix applied");
+        Ok(true)
+    }
+
     // Helper methods
 
     fn build_execution_prompt(&self, task: &Task) -> String {

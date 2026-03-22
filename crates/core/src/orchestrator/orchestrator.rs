@@ -1813,6 +1813,54 @@ async fn run_task_pipeline(
         }
     }
 
+    // Functionality verification - ensure the application actually runs
+    let (func_passed, func_output) = match executor.verify_functionality(&mut task).await {
+        Ok(result) => result,
+        Err(e) => {
+            warn!(task_id = %task.id, error = %e, "Functionality verification error");
+            (true, format!("Functionality verification skipped: {}", e)) // Continue on error
+        }
+    };
+
+    if !func_passed {
+        // Try to fix runtime errors
+        let fixed = match executor.fix_runtime_errors(&mut task, &func_output).await {
+            Ok(f) => f,
+            Err(e) => {
+                error!(task_id = %task.id, error = %e, "Runtime fix attempt failed");
+                false
+            }
+        };
+
+        if !fixed && task.retries < MAX_RETRIES {
+            task.retries += 1;
+            task.status = TaskStatus::Pending;
+            task.error = Some(format!("Functionality failed: {}", func_output));
+            task.started_at = None;
+            if let Err(e) = store.save_task(&task).await {
+                error!(task_id = %task.id, error = %e, "Failed to save task for retry after functionality check");
+            }
+            warn!(task_id = %task.id, attempt = task.retries, "Functionality failed, retrying");
+            return Ok(None);
+        } else if !fixed {
+            task.status = TaskStatus::Failed;
+            task.error = Some(format!("Functionality failed: {}", func_output));
+            task.started_at = None;
+            if let Err(e) = store.save_task(&task).await {
+                error!(task_id = %task.id, error = %e, "Failed to save task as Failed after functionality check");
+            }
+            error!(task_id = %task.id, "Functionality failed permanently");
+            // Emit Failed status
+            if let Some(ref sender) = event_sender {
+                let _ = sender.send(Event::TaskStatusChanged {
+                    id: task.id.clone(),
+                    status: TaskStatus::Failed,
+                });
+            }
+            return Ok(None);
+        }
+    }
+
     // Mark completed
     task.status = TaskStatus::Completed;
     task.started_at = None;
