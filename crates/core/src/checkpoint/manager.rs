@@ -61,6 +61,8 @@ impl CheckpointManager {
     /// Set start time
     pub fn set_start_time(&mut self) {
         self.start_time = Some(Instant::now());
+        // Also initialize last_review_time so timeout trigger works from the start
+        self.last_review_time = Some(Instant::now());
     }
 
     /// Called when a task completes
