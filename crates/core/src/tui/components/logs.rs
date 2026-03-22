@@ -1,6 +1,7 @@
 //! Logs panel component.
 
 use crate::tui::{LogEntry, LogLevel};
+use chrono::TimeZone;
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -71,8 +72,9 @@ impl LogsPanel {
                 current_phase = entry.phase.as_deref();
             }
 
-            // Format time as HH:MM
-            let time = entry.timestamp.format("%H:%M");
+            // Format time as HH:MM (convert UTC to local time)
+            let local_time = entry.timestamp.with_timezone(&chrono::Local);
+            let time = local_time.format("%H:%M");
 
             // Get level icon and color
             let (icon, color) = Self::level_style(entry.level);

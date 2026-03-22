@@ -38,7 +38,7 @@ pub const MAX_DEPTH: u32 = 2;
 pub const MAX_RETRIES: u32 = 3;
 
 /// 规划操作超时（秒）
-pub const TIMEOUT_PLAN: u64 = 120;
+pub const TIMEOUT_PLAN: u64 = 300;
 
 /// 执行操作超时（秒）
 pub const TIMEOUT_EXEC: u64 = 3600;
@@ -99,7 +99,7 @@ mod tests {
     fn test_constants() {
         assert_eq!(MAX_DEPTH, 2);
         assert_eq!(MAX_RETRIES, 3);
-        assert_eq!(TIMEOUT_PLAN, 120);
+        assert_eq!(TIMEOUT_PLAN, 300);
         assert_eq!(TIMEOUT_EXEC, 3600);
         assert_eq!(MAX_PROMPT_LENGTH, 80000);
     }

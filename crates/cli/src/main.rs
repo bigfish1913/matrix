@@ -85,17 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let use_tui = !args.no_tui && std::io::stdout().is_terminal();
 
-    // For non-TUI mode, initialize tracing immediately
-    // For TUI mode, tracing will be initialized later with TuiLogLayer
-    if !use_tui {
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "matrix=info".into()),
-            )
-            .with(tracing_subscriber::fmt::layer())
-            .init();
-    }
+    // Tracing will be initialized in run_with_tui or run_simple with appropriate layers
 
     // Check runtime dependencies
     check_dependencies()?;
@@ -123,6 +113,9 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
 
     // Create event channel for orchestrator -> TUI communication
     let (event_sender, event_receiver) = create_event_channel();
+
+    // Create event channel for TUI -> orchestrator communication (question responses)
+    let (response_sender, response_receiver) = create_event_channel();
 
     // Setup log file: use provided path or default to .matrix/matrix.log
     let log_file_path = args.log_file.clone()
@@ -160,9 +153,10 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     // Get verbosity level
     let verbosity = get_verbosity(args);
 
-    // Create TUI app
+    // Create TUI app with both event receiver (from orchestrator) and response sender (to orchestrator)
     let mut app = TuiApp::new(verbosity)
         .with_event_receiver(event_receiver)
+        .with_response_sender(response_sender)
         .with_log_buffer(log_buffer.clone());
 
     let tasks_dir = workspace.join(".matrix").join("tasks");
@@ -193,6 +187,7 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
         ask_mode: !args.no_ask,
         resume: args.resume,
         event_sender: Some(event_sender),
+        event_receiver: Some(response_receiver),
         language: args.lang.clone(),
     };
 
@@ -382,6 +377,7 @@ async fn run_simple(args: &Args) -> anyhow::Result<()> {
         ask_mode: !args.no_ask,
         resume: args.resume,
         event_sender: None,
+        event_receiver: None,
         language: args.lang.clone(),
     };
 

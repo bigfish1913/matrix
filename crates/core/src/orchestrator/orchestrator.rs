@@ -3,7 +3,7 @@
 use crate::agent::SharedAgentPool;
 use crate::checkpoint::CheckpointManager;
 use crate::config::CheckpointConfig;
-use crate::config::{MAX_DEPTH, MAX_RETRIES};
+use crate::config::{MAX_DEPTH, MAX_RETRIES, TIMEOUT_PLAN};
 use crate::error::{Error, Result};
 use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::memory::GlobalMemory;
@@ -23,7 +23,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 /// Orchestrator configuration
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OrchestratorConfig {
     pub goal: String,
     pub workspace: PathBuf,
@@ -35,6 +35,8 @@ pub struct OrchestratorConfig {
     pub ask_mode: bool,
     pub resume: bool,
     pub event_sender: Option<EventSender>,
+    /// Event receiver for receiving responses from TUI (question answers)
+    pub event_receiver: Option<crate::tui::EventReceiver>,
     /// Language for AI prompts (default: "zh" for Chinese)
     pub language: String,
 }
@@ -52,6 +54,7 @@ impl OrchestratorConfig {
             ask_mode: true, // 默认开启 ask 模式
             resume: false,
             event_sender: None,
+            event_receiver: None,
             language: "zh".to_string(), // 默认使用中文
         }
     }
@@ -81,7 +84,7 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     /// Create a new orchestrator
-    pub async fn new(config: OrchestratorConfig) -> Result<Self> {
+    pub async fn new(mut config: OrchestratorConfig) -> Result<Self> {
         // Create directories
         fs::create_dir_all(&config.workspace).await?;
         fs::create_dir_all(&config.tasks_dir).await?;
@@ -96,8 +99,9 @@ impl Orchestrator {
             .join(".matrix");
         let question_store = Arc::new(QuestionStore::new(questions_dir).await?);
 
-        // Create event channel for receiving responses from TUI
-        let (event_sender, event_receiver) = crate::tui::create_event_channel();
+        // Use event_receiver from config (passed from CLI for bidirectional communication)
+        // This allows TUI to send responses back to orchestrator
+        let event_receiver = config.event_receiver.take();
 
         let executor_config = ExecutorConfig {
             doc_content: config.doc_content.clone(),
@@ -111,7 +115,7 @@ impl Orchestrator {
             store.clone(),
             agent_pool.clone(),
             executor_config,
-        ).with_event_sender(Some(event_sender.clone()))
+        ).with_event_sender(config.event_sender.clone())
          .with_question_store(Arc::clone(&question_store)));
 
         // Initialize checkpoint and memory systems
@@ -120,17 +124,14 @@ impl Orchestrator {
         let global_memory = GlobalMemory::new(&config.workspace);
 
         Ok(Self {
-            config: OrchestratorConfig {
-                event_sender: Some(event_sender),
-                ..config
-            },
+            config,
             store,
             agent_pool,
             executor,
             start_time: None,
             last_progress: (0, 0, 0, 0),
             question_store,
-            event_receiver: Some(event_receiver),
+            event_receiver,
             pending_question_responses: HashMap::new(),
             checkpoint,
             global_memory,
@@ -404,7 +405,7 @@ Example:
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(120), None, None)
+            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None)
             .await?;
 
         if result.is_error {
@@ -676,7 +677,7 @@ Start with # Project Roadmap"#,
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(120), None, None)
+            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None)
             .await?;
 
         if result.is_error {
@@ -725,9 +726,10 @@ Start with # Project Roadmap"#,
         let roadmap_path = self.config.workspace.join("ROADMAP.md");
         let roadmap_section = if roadmap_path.exists() {
             if let Ok(roadmap) = tokio::fs::read_to_string(&roadmap_path).await {
-                // Truncate if too long
-                let truncated = if roadmap.len() > 4000 {
-                    format!("{}...\n[truncated]", &roadmap[..4000])
+                // Truncate if too long (use character-based truncation for UTF-8 safety)
+                let truncated = if roadmap.chars().count() > 4000 {
+                    let truncated_chars: String = roadmap.chars().take(4000).collect();
+                    format!("{}...\n[truncated]", truncated_chars)
                 } else {
                     roadmap
                 };
@@ -772,7 +774,7 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(120), None, None)
+            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None)
             .await?;
 
         if result.is_error {
@@ -987,7 +989,7 @@ OR if splitting needed:
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(120), None, None)
+            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None)
             .await?;
 
         // Emit token usage update if available

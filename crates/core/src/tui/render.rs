@@ -159,6 +159,13 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         render_clarification_dialog(frame, app);
     }
 
+    // Questions answer dialog
+    if app.questions_panel.in_answer_dialog {
+        if let Some(question) = app.selected_question().cloned() {
+            app.questions_panel.render_answer_dialog(frame, frame.area(), &question);
+        }
+    }
+
     // Pause indicator
     if app.is_paused {
         render_paused_indicator(frame);

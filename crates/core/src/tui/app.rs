@@ -3,7 +3,7 @@
 use crate::models::{Question, QuestionStatus, TaskStatus};
 use crate::tui::{
     Activity, ClarificationQuestion, ClarificationSender, ConfirmSender, Event, EventReceiver,
-    ExecutionState, Key, LogBuffer, LogContext, LogLevel, QuestionSender, VerbosityLevel,
+    EventSender, ExecutionState, Key, LogBuffer, LogContext, LogLevel, QuestionSender, VerbosityLevel,
 };
 use crate::tui::components::QuestionsPanel;
 use std::collections::HashMap;
@@ -302,6 +302,8 @@ pub struct TuiApp {
 
     // Event receiver
     event_receiver: Option<EventReceiver>,
+    /// Sender for responses back to orchestrator (question answers)
+    response_sender: Option<EventSender>,
 
     // Help overlay
     pub show_help: bool,
@@ -362,6 +364,7 @@ impl TuiApp {
             questions_scroll: 0,
             verbosity,
             event_receiver: None,
+            response_sender: None,
             show_help: false,
             clarification: ClarificationState::default(),
             resume_confirm: ResumeConfirmState::default(),
@@ -374,6 +377,11 @@ impl TuiApp {
 
     pub fn with_event_receiver(mut self, receiver: EventReceiver) -> Self {
         self.event_receiver = Some(receiver);
+        self
+    }
+
+    pub fn with_response_sender(mut self, sender: EventSender) -> Self {
+        self.response_sender = Some(sender);
         self
     }
 
@@ -462,6 +470,10 @@ impl TuiApp {
             if self.output_lines.len() > self.max_output_lines {
                 let remove_count = self.output_lines.len() - self.max_output_lines;
                 self.output_lines.drain(0..remove_count);
+            }
+            // Auto-scroll to bottom if auto_follow is enabled
+            if self.output_auto_follow {
+                self.output_scroll = u16::MAX;
             }
         }
     }
@@ -645,7 +657,7 @@ impl TuiApp {
                 }
             }
             Key::Enter | Key::Char(' ') => {
-                // Submit answer - store for orchestrator to pick up
+                // Submit answer
                 let answer = if self.questions_panel.is_other_selected(&question) {
                     self.questions_panel.custom_input.clone()
                 } else {
@@ -656,10 +668,18 @@ impl TuiApp {
                         .unwrap_or_default()
                 };
 
-                // Mark question as having pending answer
+                // Send QuestionAnswered event to orchestrator
+                if let Some(ref sender) = self.response_sender {
+                    let _ = sender.send(Event::QuestionAnswered {
+                        question_id: question.id.clone(),
+                        answer: answer.clone(),
+                    });
+                }
+
+                // Update local state
                 if let Some(q) = self.questions.get_mut(selected) {
-                    // Store the pending answer - orchestrator will process it
                     q.answer = Some(answer);
+                    q.status = QuestionStatus::Answered;
                 }
 
                 self.questions_panel.in_answer_dialog = false;
@@ -1157,20 +1177,32 @@ impl TuiApp {
                 }
             }
             Event::ClaudeRequest { task_id, prompt, model, timeout_secs } => {
-                // Show request details in output panel
-                let header = format!("═══ Claude Request ═══\nModel: {} | Timeout: {}s", model, timeout_secs);
-                let line = OutputLine::Result {
-                    task_id: task_id.clone(),
-                    content: format!("{}\n\n{}", header, prompt),
-                };
-                self.add_output_line(task_id, line);
+                // Show full request details in verbose mode
+                if self.verbosity >= VerbosityLevel::Verbose {
+                    let header = format!("═══════════════════════════════════════\n\
+                                         ═══ Claude Request ═══\n\
+                                         Model: {} | Timeout: {}s\n\
+                                         ═══════════════════════════════════════",
+                        model, timeout_secs);
+                    let line = OutputLine::Result {
+                        task_id: task_id.clone(),
+                        content: format!("{}\n\n{}", header, prompt),
+                    };
+                    self.add_output_line(task_id, line);
+                }
             }
             Event::ClaudeResult { task_id, result } => {
-                let line = OutputLine::Result {
-                    task_id: task_id.clone(),
-                    content: result,
-                };
-                self.add_output_line(task_id, line);
+                // Show full result in verbose mode
+                if self.verbosity >= VerbosityLevel::Verbose {
+                    let header = "═══════════════════════════════════════\n\
+                                  ═══ Claude Response ═══\n\
+                                  ═══════════════════════════════════════";
+                    let line = OutputLine::Result {
+                        task_id: task_id.clone(),
+                        content: format!("{}\n\n{}", header, result),
+                    };
+                    self.add_output_line(task_id, line);
+                }
             }
             Event::Log {
                 timestamp,

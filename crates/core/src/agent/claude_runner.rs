@@ -153,6 +153,7 @@ impl ClaudeRunner {
             .arg("--dangerously-skip-permissions")
             .arg("-p")
             .current_dir(workdir)
+            .env("CLAUDECODE", "") // Clear to allow nested Claude Code calls
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -222,6 +223,7 @@ impl ClaudeRunner {
             .arg("--dangerously-skip-permissions")
             .arg("-p")
             .current_dir(workdir)
+            .env("CLAUDECODE", "") // Clear to allow nested Claude Code calls
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
