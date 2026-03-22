@@ -111,6 +111,7 @@ impl Orchestrator {
             doc_content: config.doc_content.clone(),
             mcp_config: config.mcp_config.clone(),
             debug_mode: config.debug_mode,
+            language: config.language.clone(),
             ..Default::default()
         };
 
@@ -2055,6 +2056,20 @@ async fn run_task_pipeline(
         let _ = sender.send(Event::TaskStatusChanged {
             id: task.id.clone(),
             status: TaskStatus::Completed,
+        });
+
+        // Emit task summary with code changes
+        let file_summaries: Vec<crate::tui::FileChangeSummary> = task.modified_files
+            .iter()
+            .map(|path| crate::tui::FileChangeSummary {
+                path: path.clone(),
+                description: String::new(),
+            })
+            .collect();
+        let _ = sender.send(Event::TaskSummary {
+            task_id: task.id.clone(),
+            title: task.title.clone(),
+            modified_files: file_summaries,
         });
     }
 

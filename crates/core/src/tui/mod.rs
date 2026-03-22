@@ -127,7 +127,7 @@ impl Default for LogBuffer {
 
 pub use app::TuiApp;
 pub use event::{
-    Activity, ClarificationQuestion, ClarificationSender, ConfirmSender, Event, ExecutionState, Key,
+    Activity, ClarificationQuestion, ClarificationSender, ConfirmSender, Event, ExecutionState, FileChangeSummary, Key,
     LogContext, LogLevel, QuestionSender, TuiEvent, VerbosityLevel,
 };
 pub use render::{render_app, MatrixTerminal};

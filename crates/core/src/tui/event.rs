@@ -5,6 +5,13 @@ use crate::models::{Question, TaskStatus};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Summary of a file change for task completion display
+#[derive(Debug, Clone)]
+pub struct FileChangeSummary {
+    pub path: String,
+    pub description: String,
+}
+
 /// Verbosity level for Claude output display
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VerbosityLevel {
@@ -213,6 +220,12 @@ pub enum Event {
     TaskProgress {
         id: String,
         message: String,
+    },
+    /// Task completed with summary of changes
+    TaskSummary {
+        task_id: String,
+        title: String,
+        modified_files: Vec<FileChangeSummary>,
     },
 
     // Claude output events

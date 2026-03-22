@@ -36,6 +36,8 @@ pub struct ExecutorConfig {
     pub doc_content: Option<String>,
     pub mcp_config: Option<PathBuf>,
     pub debug_mode: bool,
+    /// Language for AI prompts (default: "zh" for Chinese)
+    pub language: String,
 }
 
 impl Default for ExecutorConfig {
@@ -46,6 +48,18 @@ impl Default for ExecutorConfig {
             doc_content: None,
             mcp_config: None,
             debug_mode: false,
+            language: "zh".to_string(), // 默认使用中文
+        }
+    }
+}
+
+impl ExecutorConfig {
+    /// Get language instruction for AI prompts
+    pub fn lang_instruction(&self) -> &str {
+        match self.language.as_str() {
+            "zh" => "请用中文回复。所有代码注释、说明、输出信息都用中文。",
+            "en" => "Respond in English. All code comments, explanations, and output messages in English.",
+            _ => "请用中文回复。所有代码注释、说明、输出信息都用中文。",
         }
     }
 }

@@ -3,7 +3,7 @@
 use crate::models::{Question, QuestionStatus, TaskStatus};
 use crate::tui::{
     Activity, ClarificationQuestion, ClarificationSender, ConfirmSender, Event, EventReceiver,
-    EventSender, ExecutionState, Key, LogBuffer, LogContext, LogLevel, QuestionSender, VerbosityLevel,
+    EventSender, ExecutionState, FileChangeSummary, Key, LogBuffer, LogContext, LogLevel, QuestionSender, VerbosityLevel,
 };
 use crate::tui::components::QuestionsPanel;
 use std::collections::HashMap;
@@ -1183,6 +1183,53 @@ impl TuiApp {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
                     task.description = message;
                 }
+            }
+            Event::TaskSummary { task_id, title, modified_files } => {
+                // Log task summary to logs panel
+                self.log_buffer.push(
+                    LogLevel::Info,
+                    format!("══════ {} 完成 ══════", title),
+                    LogContext::default(),
+                );
+                if modified_files.is_empty() {
+                    self.log_buffer.push(
+                        LogLevel::Info,
+                        "  无文件修改".to_string(),
+                        LogContext::default(),
+                    );
+                } else {
+                    self.log_buffer.push(
+                        LogLevel::Info,
+                        format!("  修改了 {} 个文件:", modified_files.len()),
+                        LogContext::default(),
+                    );
+                    for file in modified_files.iter().take(15) {
+                        self.log_buffer.push(
+                            LogLevel::Info,
+                            format!("    • {}", file.path),
+                            LogContext::default(),
+                        );
+                        if !file.description.is_empty() {
+                            self.log_buffer.push(
+                                LogLevel::Info,
+                                format!("      {}", file.description),
+                                LogContext::default(),
+                            );
+                        }
+                    }
+                    if modified_files.len() > 15 {
+                        self.log_buffer.push(
+                            LogLevel::Info,
+                            format!("    ... 还有 {} 个文件", modified_files.len() - 15),
+                            LogContext::default(),
+                        );
+                    }
+                }
+                self.log_buffer.push(
+                    LogLevel::Info,
+                    "".to_string(),
+                    LogContext::default(),
+                );
             }
             Event::ClaudeThinking { task_id, content } => {
                 // Only show thinking in verbose mode
