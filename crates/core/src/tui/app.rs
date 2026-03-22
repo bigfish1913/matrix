@@ -198,6 +198,28 @@ impl Tab {
             Self::Questions => Self::Output,
         }
     }
+
+    /// Get next visible tab based on verbosity
+    pub fn next_visible(self, verbosity: VerbosityLevel) -> Self {
+        let next_tab = self.next();
+        // Skip Output tab in non-verbose mode
+        if next_tab == Tab::Output && verbosity < VerbosityLevel::Verbose {
+            next_tab.next() // Skip to Questions
+        } else {
+            next_tab
+        }
+    }
+
+    /// Get previous visible tab based on verbosity
+    pub fn prev_visible(self, verbosity: VerbosityLevel) -> Self {
+        let prev_tab = self.prev();
+        // Skip Output tab in non-verbose mode
+        if prev_tab == Tab::Output && verbosity < VerbosityLevel::Verbose {
+            prev_tab.prev() // Skip to Tasks
+        } else {
+            prev_tab
+        }
+    }
 }
 
 /// Task display info for UI
@@ -525,11 +547,11 @@ impl TuiApp {
 
         match key {
             Key::Tab | Key::Right => {
-                self.current_tab = self.current_tab.next();
+                self.current_tab = self.current_tab.next_visible(self.verbosity);
                 self.reset_scroll();
             }
             Key::BackTab | Key::Left => {
-                self.current_tab = self.current_tab.prev();
+                self.current_tab = self.current_tab.prev_visible(self.verbosity);
                 self.reset_scroll();
             }
             Key::Up => {
@@ -1177,32 +1199,35 @@ impl TuiApp {
                 }
             }
             Event::ClaudeRequest { task_id, prompt, model, timeout_secs } => {
-                // Show full request details in verbose mode
-                if self.verbosity >= VerbosityLevel::Verbose {
-                    let header = format!("═══════════════════════════════════════\n\
-                                         ═══ Claude Request ═══\n\
-                                         Model: {} | Timeout: {}s\n\
-                                         ═══════════════════════════════════════",
-                        model, timeout_secs);
-                    let line = OutputLine::Result {
-                        task_id: task_id.clone(),
-                        content: format!("{}\n\n{}", header, prompt),
-                    };
-                    self.add_output_line(task_id, line);
-                }
+                // Show request summary in normal mode (full details in verbose)
+                let summary = if self.verbosity >= VerbosityLevel::Verbose {
+                    format!("{}\n\n{}",
+                        format!("═══════════════════════════════════════\n\
+                                 ═══ Claude Request ═══\n\
+                                 Model: {} | Timeout: {}s\n\
+                                 ═══════════════════════════════════════",
+                            model, timeout_secs),
+                        prompt)
+                } else {
+                    format!("[Claude Request] Model: {} | Timeout: {}s | Length: {} chars",
+                        model, timeout_secs, prompt.len())
+                };
+                let line = OutputLine::Result {
+                    task_id: task_id.clone(),
+                    content: summary,
+                };
+                self.add_output_line(task_id, line);
             }
             Event::ClaudeResult { task_id, result } => {
-                // Show full result in verbose mode
-                if self.verbosity >= VerbosityLevel::Verbose {
-                    let header = "═══════════════════════════════════════\n\
-                                  ═══ Claude Response ═══\n\
-                                  ═══════════════════════════════════════";
-                    let line = OutputLine::Result {
-                        task_id: task_id.clone(),
-                        content: format!("{}\n\n{}", header, result),
-                    };
-                    self.add_output_line(task_id, line);
-                }
+                // Show Claude response in normal mode (not just verbose)
+                let header = "═══════════════════════════════════════\n\
+                              ═══ Claude Response ═══\n\
+                              ═══════════════════════════════════════";
+                let line = OutputLine::Result {
+                    task_id: task_id.clone(),
+                    content: format!("{}\n\n{}", header, result),
+                };
+                self.add_output_line(task_id, line);
             }
             Event::Log {
                 timestamp,

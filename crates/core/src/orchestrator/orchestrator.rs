@@ -70,6 +70,10 @@ pub struct Orchestrator {
     start_time: Option<Instant>,
     /// Track last progress values to avoid duplicate log spam
     last_progress: (usize, usize, usize, usize), // (completed, pending, failed, total)
+    /// Last time blocked tasks warning was logged (for throttling)
+    last_blocked_warning: Option<Instant>,
+    /// Last time checkpoint warnings were logged (for throttling)
+    last_checkpoint_warning: Option<Instant>,
     /// Question store for persistent question storage
     question_store: Arc<QuestionStore>,
     /// Event receiver for receiving responses from TUI
@@ -130,6 +134,8 @@ impl Orchestrator {
             executor,
             start_time: None,
             last_progress: (0, 0, 0, 0),
+            last_blocked_warning: None,
+            last_checkpoint_warning: None,
             question_store,
             event_receiver,
             pending_question_responses: HashMap::new(),
@@ -602,14 +608,30 @@ Example:
 
         info!(total, completed, failed, pending, "Resuming tasks");
 
-        // Reset stuck in_progress tasks
+        // Load all tasks and emit events to TUI
         let tasks = self.store.all_tasks().await?;
         for mut task in tasks {
+            // Reset stuck in_progress tasks
             if task.status == TaskStatus::InProgress {
                 task.status = TaskStatus::Pending;
                 self.store.save_task(&task).await?;
                 info!(task_id = %task.id, "Reset stuck task");
             }
+
+            // Emit TaskCreated event for TUI to display existing tasks
+            self.emit_event(Event::TaskCreated {
+                id: task.id.clone(),
+                title: task.title.clone(),
+                parent_id: task.parent_id.clone(),
+                depth: task.depth,
+                depends_on: task.depends_on.clone(),
+            });
+
+            // Emit TaskStatusChanged to sync current status
+            self.emit_event(Event::TaskStatusChanged {
+                id: task.id.clone(),
+                status: task.status.clone(),
+            });
         }
 
         Ok(())
@@ -1166,6 +1188,11 @@ OR if splitting needed:
                             self.checkpoint.on_task_completed();
                             self.update_task_memory(task).await;
 
+                            // Update manifest with latest counts
+                            if let Err(e) = self.store.save_manifest(&self.config.goal).await {
+                                warn!(error = %e, "Failed to update manifest");
+                            }
+
                             // Check if review is needed
                             let completed = self.store.count(TaskStatus::Completed).await.unwrap_or(0);
                             let total = self.store.total().await.unwrap_or(0);
@@ -1185,15 +1212,29 @@ OR if splitting needed:
             // Pre-batch checkpoint: validate dependencies and check for issues
             match self.checkpoint.pre_batch_checkpoint().await {
                 Ok(result) => {
-                    for warning in &result.warnings {
-                        warn!("Checkpoint warning: {}", warning);
+                    // Throttle checkpoint warnings (only log every 30 seconds)
+                    let should_log_checkpoint = self.last_checkpoint_warning
+                        .map(|t| t.elapsed().as_secs() >= 30)
+                        .unwrap_or(true);
+                    if should_log_checkpoint && !result.warnings.is_empty() {
+                        self.last_checkpoint_warning = Some(Instant::now());
+                        for warning in &result.warnings {
+                            warn!("Checkpoint warning: {}", warning);
+                        }
                     }
-                    for blocked in &result.blocked {
-                        warn!(
-                            task_id = %blocked.task_id,
-                            blocked_by = ?blocked.blocked_by,
-                            "Task blocked by failed dependencies"
-                        );
+                    // Throttle blocked task warnings (only log every 30 seconds)
+                    let should_log_blocked = self.last_blocked_warning
+                        .map(|t| t.elapsed().as_secs() >= 30)
+                        .unwrap_or(true);
+                    if should_log_blocked && !result.blocked.is_empty() {
+                        self.last_blocked_warning = Some(Instant::now());
+                        for blocked in &result.blocked {
+                            warn!(
+                                task_id = %blocked.task_id,
+                                blocked_by = ?blocked.blocked_by,
+                                "Task blocked by failed dependencies"
+                            );
+                        }
                     }
                     for stalled_id in &result.stalled {
                         warn!(task_id = %stalled_id, "Task appears stalled");
@@ -1205,14 +1246,46 @@ OR if splitting needed:
             }
 
             // Get schedulable tasks
-            let completed_ids: HashSet<String> = self
-                .store
-                .all_tasks()
-                .await?
-                .into_iter()
+            let all_tasks = self.store.all_tasks().await?;
+            let completed_ids: HashSet<String> = all_tasks
+                .iter()
                 .filter(|t| t.status == TaskStatus::Completed || t.status == TaskStatus::Skipped)
-                .map(|t| t.id)
+                .map(|t| t.id.clone())
                 .collect();
+
+            // Build a map of parent_task -> [subtask_ids] for split tasks
+            let mut subtask_map: HashMap<String, Vec<String>> = HashMap::new();
+            for task in &all_tasks {
+                // Check if this is a subtask (contains a hyphen followed by a number at the end)
+                if let Some(pos) = task.id.rfind('-') {
+                    if pos > 0 {
+                        let parent_id = &task.id[..pos];
+                        // Check if the suffix after the last hyphen is a number
+                        if task.id[pos+1..].parse::<u32>().is_ok() {
+                            subtask_map.entry(parent_id.to_string())
+                                .or_default()
+                                .push(task.id.clone());
+                        }
+                    }
+                }
+            }
+
+            // Helper function to check if a dependency is satisfied
+            // A dependency is satisfied if:
+            // 1. The task itself is completed/skipped, OR
+            // 2. The task was split into subtasks and all subtasks are completed/skipped
+            let is_dependency_satisfied = |dep: &str| -> bool {
+                if completed_ids.contains(dep) {
+                    return true;
+                }
+                // Check if this dependency was split into subtasks
+                if let Some(subtasks) = subtask_map.get(dep) {
+                    // All subtasks must be completed
+                    subtasks.iter().all(|s| completed_ids.contains(s))
+                } else {
+                    false
+                }
+            };
 
             let pending: Vec<Task> = self
                 .store
@@ -1220,7 +1293,7 @@ OR if splitting needed:
                 .await?
                 .into_iter()
                 .filter(|t| !dispatched_ids.contains(&t.id))
-                .filter(|t| t.depends_on.iter().all(|dep| completed_ids.contains(dep)))
+                .filter(|t| t.depends_on.iter().all(|dep| is_dependency_satisfied(dep)))
                 .collect();
 
             // Phase 2: Assess complexity and split if needed

@@ -1,6 +1,6 @@
 //! Tab switcher component.
 
-use crate::tui::app::Tab;
+use crate::tui::{app::Tab, VerbosityLevel};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -12,8 +12,13 @@ pub struct TabSwitcher;
 
 impl TabSwitcher {
     /// Render tab switcher
-    pub fn render(current_tab: Tab) -> Tabs<'static> {
-        let titles = vec!["Logs", "Tasks", "Claude Output", "Questions"];
+    /// In normal mode, hide "Claude Output" tab (only show in verbose mode)
+    pub fn render(current_tab: Tab, verbosity: VerbosityLevel) -> Tabs<'static> {
+        let titles = if verbosity >= VerbosityLevel::Verbose {
+            vec!["Logs", "Tasks", "Claude Output", "Questions"]
+        } else {
+            vec!["Logs", "Tasks", "Questions"]
+        };
 
         let tabs: Vec<Line<'static>> = titles
             .into_iter()
@@ -26,14 +31,30 @@ impl TabSwitcher {
             })
             .collect();
 
+        // Calculate select index based on visibility
+        let select_index = match current_tab {
+            Tab::Logs => 0,
+            Tab::Tasks => 1,
+            Tab::Output => {
+                if verbosity >= VerbosityLevel::Verbose {
+                    2
+                } else {
+                    // Output tab not visible, stay on Tasks or handle gracefully
+                    1
+                }
+            }
+            Tab::Questions => {
+                if verbosity >= VerbosityLevel::Verbose {
+                    3
+                } else {
+                    2 // Questions is at index 2 when Output is hidden
+                }
+            }
+        };
+
         Tabs::new(tabs)
             .block(Block::default().borders(Borders::BOTTOM))
-            .select(match current_tab {
-                Tab::Logs => 0,
-                Tab::Tasks => 1,
-                Tab::Output => 2,
-                Tab::Questions => 3,
-            })
+            .select(select_index)
             .style(Style::default().fg(Color::White))
             .highlight_style(
                 Style::default()

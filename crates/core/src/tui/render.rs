@@ -28,7 +28,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         .split(frame.area());
 
     // Render tab switcher with additional info
-    let tabs = TabSwitcher::render(app.current_tab);
+    let tabs = TabSwitcher::render(app.current_tab, app.verbosity);
     frame.render_widget(tabs, chunks[0]);
 
     // Render main content based on current tab

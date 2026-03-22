@@ -42,6 +42,9 @@ pub enum Error {
 
     #[error("Workspace error: {0}")]
     Workspace(String),
+
+    #[error("Rate limit exceeded: {0}")]
+    RateLimit(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -103,11 +103,38 @@ impl TaskStore {
         let mut warnings = Vec::new();
         let task_ids: HashSet<_> = tasks.iter().map(|t| t.id.clone()).collect();
 
+        // Build a map of task_id -> subtask_ids (e.g., task-006 -> [task-006-1, task-006-2])
+        let mut subtask_map: HashMap<String, Vec<String>> = HashMap::new();
+        for task in &tasks {
+            // Check if this is a subtask (contains a hyphen followed by a number)
+            if let Some(pos) = task.id.rfind('-') {
+                if pos > 0 {
+                    let parent_id = &task.id[..pos];
+                    // Check if the suffix after the last hyphen is a number
+                    if task.id[pos+1..].parse::<u32>().is_ok() {
+                        subtask_map.entry(parent_id.to_string())
+                            .or_default()
+                            .push(task.id.clone());
+                    }
+                }
+            }
+        }
+
         // Check for missing dependencies
         for task in &tasks {
             for dep in &task.depends_on {
                 if !task_ids.contains(dep) {
-                    warnings.push(format!("[{}] depends on missing task [{}]", task.id, dep));
+                    // Check if this dependency has been split into subtasks
+                    if let Some(subtasks) = subtask_map.get(dep) {
+                        // Check if all subtasks exist (subtasks themselves are in task_ids)
+                        let all_subtasks_exist = subtasks.iter().all(|s| task_ids.contains(s));
+                        if !all_subtasks_exist {
+                            warnings.push(format!("[{}] depends on [{}] which was split but some subtasks are missing", task.id, dep));
+                        }
+                        // If all subtasks exist, dependency is satisfied via subtasks - no warning needed
+                    } else {
+                        warnings.push(format!("[{}] depends on missing task [{}]", task.id, dep));
+                    }
                 }
             }
         }

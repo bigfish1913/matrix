@@ -83,7 +83,7 @@ impl ClaudeRunner {
         self
     }
 
-    /// Call Claude CLI with a prompt (with retry on timeout)
+    /// Call Claude CLI with a prompt (with retry on timeout and rate limit)
     pub async fn call(
         &self,
         prompt: &str,
@@ -120,6 +120,27 @@ impl ClaudeRunner {
 
             match result {
                 Ok(r) => return Ok(r),
+                Err(Error::RateLimit(reset_time)) => {
+                    warn!(attempt, max_retries = MAX_RETRIES, reset_time = %reset_time, "Rate limit hit on attempt {}", attempt);
+
+                    // Try to wait until reset time
+                    if let Some(wait_secs) = calculate_wait_until_reset(&reset_time) {
+                        if wait_secs > 0 && wait_secs < 3600 {  // Max 1 hour wait
+                            info!(wait_secs, "Waiting until rate limit reset");
+                            tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+                            last_error = Some(Error::RateLimit(reset_time));
+                            continue;  // Retry after waiting
+                        }
+                    }
+
+                    last_error = Some(Error::RateLimit(format!("{} (attempt {}/{})", reset_time, attempt, MAX_RETRIES)));
+
+                    // Wait before retry (exponential backoff)
+                    if attempt < MAX_RETRIES {
+                        let delay = Duration::from_secs(60u64 * attempt as u64);  // 1 min, 2 min, 3 min
+                        tokio::time::sleep(delay).await;
+                    }
+                }
                 Err(Error::Timeout(msg)) => {
                     warn!(attempt, max_retries = MAX_RETRIES, "Timeout on attempt {}: {}", attempt, msg);
                     last_error = Some(Error::Timeout(format!("{} (attempt {}/{})", msg, attempt, MAX_RETRIES)));
@@ -130,7 +151,7 @@ impl ClaudeRunner {
                         tokio::time::sleep(delay).await;
                     }
                 }
-                Err(e) => return Err(e), // Non-timeout errors are not retried
+                Err(e) => return Err(e), // Non-timeout/rate-limit errors are not retried
             }
         }
 
@@ -406,6 +427,13 @@ fn truncate_prompt_safely(prompt: &str, max_length: usize) -> String {
 
 /// Parse Claude CLI output to extract result
 fn parse_claude_result(output: &str) -> Result<ClaudeResult> {
+    // Check for rate limit error (429)
+    if output.contains("\"code\":\"1308\"") || output.contains("使用上限") || output.contains("rate limit") {
+        // Try to extract reset time from the error message
+        let reset_time = extract_rate_limit_reset_time(output);
+        return Err(Error::RateLimit(reset_time.unwrap_or_else(|| "Rate limit exceeded".to_string())));
+    }
+
     // Try to extract JSON from code block
     if let Some(json) = extract_json_from_code_block(output) {
         if let Ok(result) = parse_result_json(&json) {
@@ -445,6 +473,32 @@ fn parse_claude_result(output: &str) -> Result<ClaudeResult> {
         session_id: None,
         usage: None,
     })
+}
+
+/// Extract rate limit reset time from error message
+fn extract_rate_limit_reset_time(output: &str) -> Option<String> {
+    // Pattern: "您的限额将在 2026-03-22 03:27:01 重置"
+    let re = regex::Regex::new(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})").ok()?;
+    let caps = re.captures(output)?;
+    Some(caps[1].to_string())
+}
+
+/// Calculate seconds to wait until reset time
+fn calculate_wait_until_reset(reset_time_str: &str) -> Option<u64> {
+    use chrono::{DateTime, Local, TimeZone, NaiveDateTime};
+
+    // Parse the reset time (format: "2026-03-22 03:27:01")
+    let naive = NaiveDateTime::parse_from_str(reset_time_str, "%Y-%m-%d %H:%M:%S").ok()?;
+    let reset_time: DateTime<Local> = Local.from_local_datetime(&naive).single()?;
+
+    let now = Local::now();
+    let diff = reset_time.signed_duration_since(now);
+
+    if diff.num_seconds() > 0 {
+        Some(diff.num_seconds() as u64)
+    } else {
+        Some(0)  // Already past reset time
+    }
 }
 
 /// Extract JSON from ```json code block
