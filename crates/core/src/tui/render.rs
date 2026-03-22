@@ -75,8 +75,11 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
             frame.render_widget(task_tabs, output_chunks[0]);
 
             // Render output content
+            // Calculate viewport height for proper auto-follow scrolling
+            let viewport_height = output_chunks[1].height.saturating_sub(2) as usize; // Subtract 2 for borders
             let scroll = if app.output_auto_follow {
-                app.output_lines.len()
+                // Scroll to show last page of content
+                app.output_lines.len().saturating_sub(viewport_height)
             } else {
                 app.output_scroll
             };
