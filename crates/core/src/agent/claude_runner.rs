@@ -352,6 +352,31 @@ impl ClaudeRunner {
                         }
                     }
 
+                    // Check for usage (token counts)
+                    if let Some(usage_obj) = json.get("usage").and_then(|v| v.as_object()) {
+                        let input_tokens = usage_obj
+                            .get("input_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        let output_tokens = usage_obj
+                            .get("output_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        let usage = TokenUsage::new(input_tokens, output_tokens);
+
+                        if let Some(ref mut r) = final_result {
+                            r.usage = Some(usage.clone());
+                        }
+
+                        // Emit token usage update event
+                        if let Some(ref task_id) = task_id_owned {
+                            self.emit_event(Event::TokenUsageUpdate {
+                                task_id: task_id.to_string(),
+                                tokens_used: usage.total_tokens,
+                            });
+                        }
+                    }
+
                     // Check for tool use (for debug output)
                     if let Some(tool_name) = json.get("tool_name").and_then(|v| v.as_str()) {
                         info!(target: "claude", "[Tool] {}", tool_name);
