@@ -8,12 +8,10 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-/// Spinner frames for animation - uses simple ASCII for maximum compatibility
-const SPINNER_FRAMES: &[&str] = &["|", "/", "-", "\\", "|", "/", "-", "\\"];
-/// Pulse indicator frames
-const PULSE_FRAMES: &[&str] = &["●", "○"];
-/// Activity indicator symbols
-const ACTIVITY_SYMBOLS: &[&str] = &["◐", "◓", "◑", "◒"];
+/// Spinner frames - more visible with brackets
+const SPINNER_FRAMES: &[&str] = &["[    ]", "[=   ]", "[==  ]", "[=== ]", "[====]", "[ ===]", "[  ==]", "[   =]"];
+/// Activity indicator symbols with rotation effect
+const ACTIVITY_SYMBOLS: &[&str] = &["◢", "◣", "◤", "◥"];
 
 /// Status bar component
 pub struct StatusBar;
@@ -54,30 +52,32 @@ impl StatusBar {
             ExecutionState::Failed => Color::Red,
         };
 
-        // Get spinner character with visual size variation for better visibility
+        // Progress bar spinner - more visible animation
         let spinner = if matches!(
             state,
             ExecutionState::Generating
                 | ExecutionState::Clarifying
                 | ExecutionState::Running { .. }
         ) {
-            // Use frame to create a "wave" effect: [ > >> >>> >> > ]
-            let frame = spinner_frame % 8;
-            match frame {
-                0 | 7 => ">",
-                1 | 6 => ">>",
-                2 | 5 => ">>>",
-                3 | 4 => ">>>>",
-                _ => ">",
-            }
+            let frame = spinner_frame % SPINNER_FRAMES.len();
+            SPINNER_FRAMES[frame]
         } else {
             ""
         };
 
-        // Activity indicator shows the type of work being done
+        // Activity indicator with rotating symbol
         let activity_indicator = if let ExecutionState::Running { activity } = state {
             let symbol = ACTIVITY_SYMBOLS[spinner_frame % ACTIVITY_SYMBOLS.len()];
-            format!(" [{}]", symbol)
+            let activity_name = match activity {
+                Activity::ApiCall => "API",
+                Activity::Test => "TEST",
+                Activity::Git => "GIT",
+                Activity::FileWrite => "WRITE",
+                Activity::Planning => "PLAN",
+                Activity::Assessing => "ASSESS",
+                Activity::Other(_) => "WORK",
+            };
+            format!(" {}:{} ", symbol, activity_name)
         } else {
             String::new()
         };
@@ -135,15 +135,15 @@ impl StatusBar {
             Span::styled(progress, Style::default().fg(Color::White)),
             Span::styled(failed_str, Style::default().fg(Color::Red)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Tokens:", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tk:", Style::default().fg(Color::Magenta)),
             Span::styled(
-                format!("{}task", current_task_tokens),
-                Style::default().fg(Color::Yellow),
+                format!("{}", current_task_tokens),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             ),
             Span::styled("/", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("{}total", total_tokens),
-                Style::default().fg(Color::Green),
+                format!("{}", total_tokens),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
             ),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(model.to_string(), Style::default().fg(Color::Magenta)),

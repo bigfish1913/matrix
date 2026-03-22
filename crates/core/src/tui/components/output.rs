@@ -19,7 +19,7 @@ impl OutputPanel {
         lines: &[OutputLine],
         task_id: Option<&str>,
         verbosity: VerbosityLevel,
-        scroll: u16,
+        scroll: usize,
         task_count: usize,
         has_output: &dyn Fn(&str) -> bool,
     ) -> Paragraph<'static> {
@@ -38,7 +38,7 @@ impl OutputPanel {
         Paragraph::new(text_lines)
             .block(Block::default().title(title).borders(Borders::ALL))
             .wrap(Wrap { trim: false })
-            .scroll((scroll, 0))
+            .scroll((scroll as u16, 0))
     }
 
     /// Render task tabs for output panel
@@ -129,17 +129,33 @@ impl OutputPanel {
                 tool_input,
                 seq: _,
             } => {
-                let input_preview = tool_input
-                    .as_ref()
-                    .map(|i| format!(" {}", i.chars().take(50).collect::<String>()))
-                    .unwrap_or_default();
-
-                vec![Line::from(vec![
+                let mut lines = vec![Line::from(vec![
                     Span::styled("[", Style::default().fg(Color::DarkGray)),
                     Span::styled(tool_name.clone(), Style::default().fg(Color::Cyan)),
                     Span::styled("]", Style::default().fg(Color::DarkGray)),
-                    Span::styled(input_preview, Style::default().fg(Color::DarkGray)),
-                ])]
+                ])];
+
+                // Show full input in verbose mode, preview in normal mode
+                if let Some(input) = tool_input {
+                    if verbosity >= VerbosityLevel::Verbose {
+                        // Show full input
+                        for line in input.lines() {
+                            lines.push(Line::styled(
+                                format!("  {}", line),
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        }
+                    } else if !input.is_empty() {
+                        // Show preview (first 100 chars)
+                        let preview: String = input.chars().take(100).collect();
+                        lines.push(Line::styled(
+                            format!("  {}", preview),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
+
+                lines
             }
             OutputLine::ToolResult {
                 task_id: _,
@@ -154,27 +170,36 @@ impl OutputPanel {
                 let mut lines = vec![Line::from(vec![
                     Span::styled("[", Style::default().fg(Color::DarkGray)),
                     Span::styled(tool_name.clone(), Style::default().fg(Color::Cyan)),
-                    Span::styled("]", Style::default().fg(Color::DarkGray)),
+                    Span::styled("] ", Style::default().fg(Color::DarkGray)),
                     Span::styled(icon, Style::default().fg(color)),
                 ])];
 
-                // Show result preview in verbose mode
-                if verbosity >= VerbosityLevel::Verbose && !result.is_empty() {
-                    let md_lines = render_markdown(result, width);
-                    if !md_lines.is_empty() {
-                        for md_line in md_lines {
-                            let mut indented_spans: Vec<Span<'static>> =
-                                vec![Span::styled("  ", Style::default().fg(Color::DarkGray))];
-                            for span in md_line.spans {
-                                indented_spans.push(span);
+                // Show result content (more in verbose mode)
+                if !result.is_empty() {
+                    if verbosity >= VerbosityLevel::Verbose {
+                        // Full markdown rendering in verbose mode
+                        let md_lines = render_markdown(result, width);
+                        if !md_lines.is_empty() {
+                            for md_line in md_lines {
+                                let mut indented_spans: Vec<Span<'static>> =
+                                    vec![Span::styled("  ", Style::default().fg(Color::DarkGray))];
+                                for span in md_line.spans {
+                                    indented_spans.push(span);
+                                }
+                                lines.push(Line::from(indented_spans));
                             }
-                            lines.push(Line::from(indented_spans));
                         }
                     } else {
-                        let preview: String = result.lines().take(3).collect::<Vec<_>>().join("\n");
-                        if !preview.is_empty() {
+                        // Show first 10 lines in normal mode
+                        for line in result.lines().take(10) {
                             lines.push(Line::styled(
-                                format!("  {}", preview.replace('\n', "\n  ")),
+                                format!("  {}", line),
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        }
+                        if result.lines().count() > 10 {
+                            lines.push(Line::styled(
+                                "  ... (more in verbose mode)",
                                 Style::default().fg(Color::DarkGray),
                             ));
                         }

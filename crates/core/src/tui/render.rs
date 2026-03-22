@@ -76,7 +76,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
 
             // Render output content
             let scroll = if app.output_auto_follow {
-                app.output_lines.len() as u16
+                app.output_lines.len()
             } else {
                 app.output_scroll
             };

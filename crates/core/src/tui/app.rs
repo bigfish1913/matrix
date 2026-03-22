@@ -319,7 +319,7 @@ pub struct TuiApp {
     // Claude output (per-task storage)
     pub output_by_task: HashMap<String, Vec<OutputLine>>,
     pub output_lines: Vec<OutputLine>, // All output (current view)
-    pub output_scroll: u16,
+    pub output_scroll: usize,
     pub output_task_id: Option<String>, // Currently viewed task output
     pub output_auto_follow: bool,       // Auto-scroll to bottom on new output
     pub max_output_lines: usize,        // Maximum lines to keep in output
@@ -515,7 +515,7 @@ impl TuiApp {
         // Auto-scroll to bottom if auto_follow is enabled and viewing the matching task or all
         if self.output_auto_follow && should_add_to_view {
             // Use a special marker value (u16::MAX means "scroll to end")
-            self.output_scroll = u16::MAX;
+            self.output_scroll = usize::MAX;
         }
     }
 
@@ -801,11 +801,11 @@ impl TuiApp {
             }
             Tab::Output => {
                 if delta > 0 {
-                    self.output_scroll = self.output_scroll.saturating_sub(delta as u16);
+                    self.output_scroll = self.output_scroll.saturating_sub(delta as usize);
                     self.output_auto_follow = false;
                 } else {
-                    let delta_abs = (-delta) as u16;
-                    let max_scroll = self.output_lines.len() as u16;
+                    let delta_abs = (-delta) as usize;
+                    let max_scroll = self.output_lines.len();
                     self.output_scroll = (self.output_scroll + delta_abs).min(max_scroll);
                     // Re-enable auto-follow if scrolled to bottom
                     if self.output_scroll >= max_scroll.saturating_sub(5) {
@@ -1093,7 +1093,7 @@ impl TuiApp {
                 }
             }
             Tab::Output => {
-                let max_scroll = self.output_lines.len() as u16;
+                let max_scroll = self.output_lines.len();
                 if self.output_scroll < max_scroll {
                     self.output_scroll = self.output_scroll.saturating_add(1);
                 }
