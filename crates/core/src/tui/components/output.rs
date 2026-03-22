@@ -9,6 +9,12 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
+/// Maximum lines to show for each output type in normal mode
+const MAX_THINKING_LINES: usize = 3;
+const MAX_TOOL_INPUT_LINES: usize = 2;
+const MAX_TOOL_RESULT_LINES: usize = 5;
+const MAX_RESULT_LINES: usize = 10;
+
 /// Output panel component
 pub struct OutputPanel;
 
@@ -44,7 +50,7 @@ impl OutputPanel {
                 content,
                 seq: _,
             } => {
-                // Show thinking content in verbose mode
+                // Show thinking content in verbose mode, limited in normal mode
                 if verbosity >= VerbosityLevel::Verbose {
                     let mut md_lines = render_markdown(content, width);
                     if md_lines.is_empty() {
@@ -55,7 +61,19 @@ impl OutputPanel {
                     }
                     md_lines
                 } else {
-                    vec![]
+                    // Show limited preview in normal mode
+                    let preview: String = content.chars().take(80).collect();
+                    vec![Line::from(vec![
+                        Span::styled("[Thinking] ", Style::default().fg(Color::Magenta)),
+                        Span::styled(
+                            if content.len() > 80 {
+                                format!("{}...", preview)
+                            } else {
+                                preview
+                            },
+                            Style::default().fg(Color::Gray),
+                        ),
+                    ])]
                 }
             }
             OutputLine::ToolUse {
@@ -70,23 +88,28 @@ impl OutputPanel {
                     Span::styled("]", Style::default().fg(Color::DarkGray)),
                 ])];
 
-                // Show full input in verbose mode, preview in normal mode
+                // Show input preview
                 if let Some(input) = tool_input {
-                    if verbosity >= VerbosityLevel::Verbose {
-                        // Show full input
-                        for line in input.lines() {
+                    if !input.is_empty() {
+                        let max_lines = if verbosity >= VerbosityLevel::Verbose {
+                            input.lines().count()
+                        } else {
+                            MAX_TOOL_INPUT_LINES
+                        };
+
+                        for (i, line) in input.lines().take(max_lines).enumerate() {
                             lines.push(Line::styled(
                                 format!("  {}", line),
                                 Style::default().fg(Color::DarkGray),
                             ));
                         }
-                    } else if !input.is_empty() {
-                        // Show preview (first 100 chars)
-                        let preview: String = input.chars().take(100).collect();
-                        lines.push(Line::styled(
-                            format!("  {}", preview),
-                            Style::default().fg(Color::DarkGray),
-                        ));
+
+                        if input.lines().count() > max_lines {
+                            lines.push(Line::styled(
+                                "  ...",
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        }
                     }
                 }
 
@@ -99,7 +122,7 @@ impl OutputPanel {
                 success,
                 seq: _,
             } => {
-                let icon = if *success { " " } else { "" };
+                let icon = if *success { " OK" } else { " ERR" };
                 let color = if *success { Color::Green } else { Color::Red };
 
                 let mut lines = vec![Line::from(vec![
@@ -109,35 +132,26 @@ impl OutputPanel {
                     Span::styled(icon, Style::default().fg(color)),
                 ])];
 
-                // Show result content (more in verbose mode)
+                // Show result content with limit
                 if !result.is_empty() {
-                    if verbosity >= VerbosityLevel::Verbose {
-                        // Full markdown rendering in verbose mode
-                        let md_lines = render_markdown(result, width);
-                        if !md_lines.is_empty() {
-                            for md_line in md_lines {
-                                let mut indented_spans: Vec<Span<'static>> =
-                                    vec![Span::styled("  ", Style::default().fg(Color::DarkGray))];
-                                for span in md_line.spans {
-                                    indented_spans.push(span);
-                                }
-                                lines.push(Line::from(indented_spans));
-                            }
-                        }
+                    let max_lines = if verbosity >= VerbosityLevel::Verbose {
+                        50 // Even in verbose mode, limit to 50 lines
                     } else {
-                        // Show first 10 lines in normal mode
-                        for line in result.lines().take(10) {
-                            lines.push(Line::styled(
-                                format!("  {}", line),
-                                Style::default().fg(Color::DarkGray),
-                            ));
-                        }
-                        if result.lines().count() > 10 {
-                            lines.push(Line::styled(
-                                "  ... (more in verbose mode)",
-                                Style::default().fg(Color::DarkGray),
-                            ));
-                        }
+                        MAX_TOOL_RESULT_LINES
+                    };
+
+                    for (i, line) in result.lines().take(max_lines).enumerate() {
+                        lines.push(Line::styled(
+                            format!("  {}", line),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+
+                    if result.lines().count() > max_lines {
+                        lines.push(Line::styled(
+                            format!("  ... (+{} more lines)", result.lines().count() - max_lines),
+                            Style::default().fg(Color::Yellow),
+                        ));
                     }
                 }
 
@@ -148,13 +162,30 @@ impl OutputPanel {
                 content,
                 seq: _,
             } => {
-                // Render result as markdown
+                // Render result as markdown with limit
                 let mut lines = vec![Line::styled(
                     "── Result ──",
                     Style::default().fg(Color::Yellow),
                 )];
+
+                let max_lines = if verbosity >= VerbosityLevel::Verbose {
+                    50
+                } else {
+                    MAX_RESULT_LINES
+                };
+
                 let md_lines = render_markdown(content, width);
-                lines.extend(md_lines);
+                for (i, md_line) in md_lines.iter().take(max_lines).enumerate() {
+                    lines.push(md_line.clone());
+                }
+
+                if md_lines.len() > max_lines {
+                    lines.push(Line::styled(
+                        format!("... (+{} more lines)", md_lines.len() - max_lines),
+                        Style::default().fg(Color::Yellow),
+                    ));
+                }
+
                 lines
             }
         }

@@ -8,8 +8,8 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-/// Spinner frames - Braille animation for smooth spinning
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Spinner frames - ASCII animation for maximum compatibility
+const SPINNER_FRAMES: &[&str] = &["|", "/", "-", "\\"];
 
 /// Status bar component
 pub struct StatusBar;
@@ -50,14 +50,17 @@ impl StatusBar {
             ExecutionState::Failed => Color::Red,
         };
 
-        // Check if we have recent activity (within 3 seconds)
-        let has_recent_pulse = last_pulse_time
-            .map(|t| t.elapsed() < Duration::from_secs(3))
-            .unwrap_or(false);
+        // Check if we have any activity
+        let has_activity = state != ExecutionState::Idle && state != ExecutionState::Completed && state != ExecutionState::Failed;
 
-        // Breathing indicator - blinks based on tick frame
-        let blink_on = (spinner_frame / 3) % 2 == 0;
-        let breath_indicator = if has_recent_pulse && blink_on { "●" } else { "○" };
+        // Breathing indicator - pure ASCII for maximum compatibility
+        // Alternates between > and >> to show liveness
+        let breathing = if has_activity {
+            let frames = [">", ">>"];
+            frames[(spinner_frame / 2) % frames.len()]
+        } else {
+            "-"
+        };
 
         // Spinner animation
         let spinner = if matches!(
@@ -70,7 +73,7 @@ impl StatusBar {
             ""
         };
 
-        // Activity indicator with activity type
+        // Activity indicator with breathing marker
         let activity_indicator = if let ExecutionState::Running { activity } = state {
             let activity_name = match activity {
                 Activity::ApiCall => "API",
@@ -81,9 +84,9 @@ impl StatusBar {
                 Activity::Assessing => "ASSESS",
                 Activity::Other(_) => "WORK",
             };
-            format!("{} {}", breath_indicator, activity_name)
-        } else if !spinner.is_empty() {
-            format!("{}", breath_indicator)
+            format!("[{} {}]", breathing, activity_name)
+        } else if has_activity {
+            format!("[{}]", breathing)
         } else {
             String::new()
         };
@@ -142,19 +145,17 @@ impl StatusBar {
             Span::styled(progress, Style::default().fg(Color::White)),
             Span::styled(failed_str, Style::default().fg(Color::Red)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Tk:", Style::default().fg(Color::Magenta)),
+            Span::styled("tk:", Style::default().fg(Color::Magenta)),
             Span::styled(
-                format!("{}", current_task_tokens),
+                format!("{}k", current_task_tokens / 1000),
                 Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                    .fg(Color::Yellow),
             ),
             Span::styled("/", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("{}", total_tokens),
+                format!("{}k", total_tokens / 1000),
                 Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
+                    .fg(Color::White),
             ),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(model.to_string(), Style::default().fg(Color::Magenta)),
