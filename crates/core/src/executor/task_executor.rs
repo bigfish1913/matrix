@@ -763,6 +763,160 @@ Respond with a brief summary of what you fixed."#,
         Ok(true)
     }
 
+    /// AI-driven functionality review
+    /// The AI will review the implementation against requirements and verify functionality
+    pub async fn ai_functionality_review(&self, task: &mut Task) -> Result<(bool, String)> {
+        info!(task_id = %task.id, title = %task.title, "AI functionality review");
+        self.emit_activity(Activity::Test);
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "🤖 AI functionality review in progress...".to_string(),
+        });
+
+        // Build the review prompt with task context and requirements
+        let doc_section = self.doc_section();
+        let workspace_files = self.workspace_files(Some(50)); // Limit files for review
+
+        let prompt = format!(
+            r#"You are a QA engineer performing functionality acceptance testing.
+
+TASK: {}
+DESCRIPTION: {}
+{}
+
+WORKSPACE: {}
+KEY FILES:
+{}
+
+INSTRUCTIONS:
+You must verify that the implementation meets the requirements.
+
+STEP 1: Start the application
+- Run `npm run dev` in the background
+- Wait for it to start (look for "localhost" or "ready" message)
+
+STEP 2: Open the application in browser
+- Navigate to http://localhost:5173 (or the port shown)
+- Take a screenshot or describe what you see
+
+STEP 3: Verify core functionality
+For a game, check:
+- Does the game load and display correctly?
+- Can you start a new game?
+- Do the main UI elements work (buttons, menus)?
+- Are there any console errors?
+
+STEP 4: Report findings
+Format your response as:
+## Functionality Review Results
+
+### ✅ Passed Checks
+- [list what works]
+
+### ❌ Failed Checks
+- [list what doesn't work]
+
+### 🐛 Bugs Found
+- [list any bugs]
+
+### Recommendation
+APPROVE / NEEDS_FIX
+
+If NEEDS_FIX, explain what needs to be fixed.
+"#,
+            task.title, task.description, doc_section, self.workspace.display(), workspace_files
+        );
+
+        // Call Claude to perform the review
+        let result = self
+            .runner
+            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .await?;
+
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: task.id.clone(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (AI review)");
+        }
+
+        let review_result = result.text.clone();
+
+        // Check if review passed
+        let passed = !result.is_error &&
+            (review_result.to_lowercase().contains("approve") ||
+             review_result.to_lowercase().contains("passed checks") && !review_result.to_lowercase().contains("failed checks"));
+
+        if passed {
+            info!(task_id = %task.id, "AI functionality review passed");
+            self.emit_event(Event::TaskProgress {
+                id: task.id.clone(),
+                message: "✓ AI functionality review passed".to_string(),
+            });
+        } else {
+            warn!(task_id = %task.id, "AI functionality review found issues");
+            self.emit_event(Event::TaskProgress {
+                id: task.id.clone(),
+                message: "✗ AI functionality review found issues".to_string(),
+            });
+        }
+
+        Ok((passed, review_result))
+    }
+
+    /// Fix issues found during AI functionality review
+    pub async fn fix_functionality_issues(&self, task: &mut Task, review_output: &str) -> Result<bool> {
+        info!(task_id = %task.id, title = %task.title, "Fixing functionality issues");
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: "🔧 Fixing functionality issues...".to_string(),
+        });
+
+        let prompt = format!(
+            r#"You are a senior developer fixing functionality issues found during QA review.
+
+TASK: {}
+DESCRIPTION: {}
+
+QA REVIEW FINDINGS:
+{}
+
+INSTRUCTIONS:
+1. Analyze each issue carefully
+2. Fix the root cause, not just symptoms
+3. Ensure fixes don't break existing functionality
+4. Test your fixes mentally before submitting
+
+Fix the issues. Make minimal, targeted changes.
+Respond with a brief summary of what you fixed."#,
+            task.title, task.description, review_output
+        );
+
+        let result = self
+            .runner
+            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .await?;
+
+        if result.is_error {
+            warn!(error = %result.text, "Fix attempt failed");
+            return Ok(false);
+        }
+
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: task.id.clone(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (functionality fix)");
+        }
+
+        info!(task_id = %task.id, title = %task.title, summary = %result.text, "Functionality fix applied");
+        Ok(true)
+    }
+
     // Helper methods
 
     fn build_execution_prompt(&self, task: &Task) -> String {
