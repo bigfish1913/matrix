@@ -411,7 +411,7 @@ Example:
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None)
+            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None, Some("orchestrator"))
             .await?;
 
         if result.is_error {
@@ -699,7 +699,7 @@ Start with # Project Roadmap"#,
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None)
+            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None, Some("orchestrator"))
             .await?;
 
         if result.is_error {
@@ -796,7 +796,7 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None)
+            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None, Some("orchestrator"))
             .await?;
 
         if result.is_error {
@@ -1011,7 +1011,7 @@ OR if splitting needed:
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None)
+            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None, Some("orchestrator"))
             .await?;
 
         // Emit token usage update if available

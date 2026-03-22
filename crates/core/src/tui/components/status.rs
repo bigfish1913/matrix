@@ -8,10 +8,12 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-/// Spinner frames for animation
-const SPINNER_FRAMES: &[&str] = &["⠋ ", "⠙ ", "⠚ ", "⠞ ", "⠟ "];
+/// Spinner frames for animation - uses simple ASCII for maximum compatibility
+const SPINNER_FRAMES: &[&str] = &["|", "/", "-", "\\", "|", "/", "-", "\\"];
 /// Pulse indicator frames
 const PULSE_FRAMES: &[&str] = &["●", "○"];
+/// Activity indicator symbols
+const ACTIVITY_SYMBOLS: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// Status bar component
 pub struct StatusBar;
@@ -52,23 +54,30 @@ impl StatusBar {
             ExecutionState::Failed => Color::Red,
         };
 
-        // Get spinner character based on state and frame
+        // Get spinner character with visual size variation for better visibility
         let spinner = if matches!(
             state,
             ExecutionState::Generating
                 | ExecutionState::Clarifying
                 | ExecutionState::Running { .. }
         ) {
-            SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()]
+            // Use frame to create a "wave" effect: [ > >> >>> >> > ]
+            let frame = spinner_frame % 8;
+            match frame {
+                0 | 7 => ">",
+                1 | 6 => ">>",
+                2 | 5 => ">>>",
+                3 | 4 => ">>>>",
+                _ => ">",
+            }
         } else {
             ""
         };
 
-        // Calculate pulse indicator based on time since last activity
-        let pulse_indicator = if matches!(state, ExecutionState::Running { .. }) {
-            // Always show pulse indicator when in Running state
-            let frame = PULSE_FRAMES[spinner_frame % PULSE_FRAMES.len()];
-            format!(" {}", frame)
+        // Activity indicator shows the type of work being done
+        let activity_indicator = if let ExecutionState::Running { activity } = state {
+            let symbol = ACTIVITY_SYMBOLS[spinner_frame % ACTIVITY_SYMBOLS.len()];
+            format!(" [{}]", symbol)
         } else {
             String::new()
         };
@@ -88,17 +97,17 @@ impl StatusBar {
         // Format task elapsed time
         let task_elapsed_str = format_duration(*task_elapsed);
 
-        // Build task string with spinner and pulse indicator
+        // Build task string with activity/spinner indicators
         let task_str = if let Some(t) = current_task {
             if !spinner.is_empty() {
-                format!(" {} {}{}", spinner, t, pulse_indicator)
+                format!(" [{}] {}{}", spinner, t, activity_indicator)
             } else {
-                format!(" {}{}", t, pulse_indicator)
+                format!(" {}{}", t, activity_indicator)
             }
         } else if !spinner.is_empty() {
-            format!(" {} {}", spinner, pulse_indicator)
+            format!(" [{}] {}", spinner, activity_indicator)
         } else {
-            pulse_indicator
+            activity_indicator
         };
 
         let verbosity_str = match verbosity {

@@ -3,6 +3,7 @@
 use crate::config::Model;
 use crate::config::MAX_PROMPT_LENGTH;
 use crate::error::{Error, Result};
+use crate::tui::{Event, EventSender};
 use std::path::Path;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -54,6 +55,7 @@ impl TokenUsage {
 pub struct ClaudeRunner {
     model: String,
     debug_mode: bool,
+    event_sender: Option<EventSender>,
 }
 
 impl ClaudeRunner {
@@ -62,6 +64,7 @@ impl ClaudeRunner {
         Self {
             model: Model::default_fast().to_string(),
             debug_mode: false,
+            event_sender: None,
         }
     }
 
@@ -83,6 +86,19 @@ impl ClaudeRunner {
         self
     }
 
+    /// Set the event sender for TUI updates
+    pub fn with_event_sender(mut self, sender: Option<EventSender>) -> Self {
+        self.event_sender = sender;
+        self
+    }
+
+    /// Emit an event to the TUI if sender is configured
+    fn emit_event(&self, event: Event) {
+        if let Some(ref sender) = self.event_sender {
+            let _ = sender.send(event);
+        }
+    }
+
     /// Call Claude CLI with a prompt (with retry on timeout and rate limit)
     pub async fn call(
         &self,
@@ -91,6 +107,7 @@ impl ClaudeRunner {
         timeout_secs: Option<u64>,
         mcp_config: Option<&Path>,
         resume_session_id: Option<&str>,
+        task_id: Option<&str>,
     ) -> Result<ClaudeResult> {
         let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(120));
         const MAX_RETRIES: usize = 3;
@@ -112,10 +129,10 @@ impl ClaudeRunner {
         for attempt in 1..=MAX_RETRIES {
             let result = if self.debug_mode {
                 // Use streaming mode for real-time output
-                self.call_streaming(&prompt, workdir, timeout_duration, mcp_config, resume_session_id).await
+                self.call_streaming(&prompt, workdir, timeout_duration, mcp_config, resume_session_id, task_id).await
             } else {
                 // Use batch mode
-                self.call_batch(&prompt, workdir, timeout_duration, mcp_config, resume_session_id).await
+                self.call_batch(&prompt, workdir, timeout_duration, mcp_config, resume_session_id, task_id).await
             };
 
             match result {
@@ -167,6 +184,7 @@ impl ClaudeRunner {
         timeout_duration: Duration,
         mcp_config: Option<&Path>,
         resume_session_id: Option<&str>,
+        task_id: Option<&str>,
     ) -> Result<ClaudeResult> {
         let mut cmd = Command::new("claude");
         cmd.args(["--model", &self.model])
@@ -236,6 +254,7 @@ impl ClaudeRunner {
         timeout_duration: Duration,
         mcp_config: Option<&Path>,
         resume_session_id: Option<&str>,
+        task_id: Option<&str>,
     ) -> Result<ClaudeResult> {
         let mut cmd = Command::new("claude");
         cmd.args(["--model", &self.model])
@@ -260,6 +279,9 @@ impl ClaudeRunner {
         }
 
         info!(model = %self.model, "Calling Claude CLI (streaming mode)");
+
+        // Clone task_id for use in async block
+        let task_id_owned = task_id.map(|s| s.to_string());
 
         let result = timeout(timeout_duration, async {
             let mut child = cmd
@@ -299,6 +321,13 @@ impl ClaudeRunner {
                             all_text = text.to_string();
                             // Send result to TUI via tracing
                             info!(target: "claude", "[Result] {}", text);
+                            // Emit TUI event
+                            if let Some(ref task_id) = task_id_owned {
+                                self.emit_event(Event::ClaudeResult {
+                                    task_id: task_id.to_string(),
+                                    result: text.to_string(),
+                                });
+                            }
                         }
                     }
 
@@ -326,14 +355,34 @@ impl ClaudeRunner {
                     // Check for tool use (for debug output)
                     if let Some(tool_name) = json.get("tool_name").and_then(|v| v.as_str()) {
                         info!(target: "claude", "[Tool] {}", tool_name);
+                        // Emit TUI event
+                        if let Some(ref task_id) = task_id_owned {
+                            let tool_input = json.get("tool_input").map(|v| {
+                                v.as_str().map(|s| s.to_string())
+                                    .unwrap_or_else(|| v.to_string())
+                            });
+                            self.emit_event(Event::ClaudeToolUse {
+                                task_id: task_id.to_string(),
+                                tool_name: tool_name.to_string(),
+                                tool_input,
+                            });
+                        }
                     }
 
-                    // Check for tool input
-                    if let Some(input) = json.get("tool_input") {
-                        if let Some(input_str) = input.as_str() {
-                            info!(target: "claude", "[Tool Input] {}", input_str);
-                        } else {
-                            info!(target: "claude", "[Tool Input] {}", input.to_string());
+                    // Check for tool output/result
+                    if let Some(output) = json.get("tool_output") {
+                        let output_str = output.as_str().map(|s| s.to_string())
+                            .unwrap_or_else(|| output.to_string());
+                        if let Some(ref task_id) = task_id_owned {
+                            if let Some(tool_name) = json.get("tool_name").and_then(|v| v.as_str()) {
+                                let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+                                self.emit_event(Event::ClaudeToolResult {
+                                    task_id: task_id.to_string(),
+                                    tool_name: tool_name.to_string(),
+                                    result: output_str,
+                                    success: !is_error,
+                                });
+                            }
                         }
                     }
 
@@ -342,7 +391,25 @@ impl ClaudeRunner {
                         for item in content {
                             if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
                                 info!(target: "claude", "[Thinking] {}", text);
+                                // Emit TUI event
+                                if let Some(ref task_id) = task_id_owned {
+                                    self.emit_event(Event::ClaudeThinking {
+                                        task_id: task_id.to_string(),
+                                        content: text.to_string(),
+                                    });
+                                }
                             }
+                        }
+                    }
+
+                    // Check for thinking/reasoning field
+                    if let Some(thinking) = json.get("thinking").and_then(|v| v.as_str()) {
+                        info!(target: "claude", "[Thinking] {}", thinking);
+                        if let Some(ref task_id) = task_id_owned {
+                            self.emit_event(Event::ClaudeThinking {
+                                task_id: task_id.to_string(),
+                                content: thinking.to_string(),
+                            });
                         }
                     }
                 }

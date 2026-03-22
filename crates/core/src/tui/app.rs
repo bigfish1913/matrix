@@ -745,11 +745,15 @@ impl TuiApp {
         }
     }
 
-    /// Handle TUI events (keyboard and mouse)
+    /// Handle TUI events (keyboard, mouse, and tick)
     pub fn handle_tui_event(&mut self, event: crate::tui::TuiEvent) {
         match event {
             crate::tui::TuiEvent::Key(key) => self.handle_key(key),
             crate::tui::TuiEvent::MouseScroll { delta } => self.handle_mouse_scroll(delta),
+            crate::tui::TuiEvent::Tick => {
+                // Advance spinner frame for animation
+                self.spinner_frame = self.spinner_frame.wrapping_add(1);
+            }
             _ => {}
         }
     }
@@ -1181,14 +1185,17 @@ impl TuiApp {
                 }
             }
             Event::ClaudeThinking { task_id, content } => {
-                let seq = self.output_seq_counter;
-                self.output_seq_counter += 1;
-                let line = OutputLine::Thinking {
-                    task_id: task_id.clone(),
-                    content,
-                    seq,
-                };
-                self.add_output_line(task_id, line);
+                // Only show thinking in verbose mode
+                if self.verbosity >= VerbosityLevel::Verbose {
+                    let seq = self.output_seq_counter;
+                    self.output_seq_counter += 1;
+                    let line = OutputLine::Thinking {
+                        task_id: task_id.clone(),
+                        content,
+                        seq,
+                    };
+                    self.add_output_line(task_id, line);
+                }
             }
             Event::ClaudeToolUse {
                 task_id,

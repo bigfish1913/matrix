@@ -57,6 +57,24 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
             }
         }
         Tab::Output => {
+            // Create sub-layout: task tabs + output content
+            let output_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1), // Task tabs
+                    Constraint::Min(5),    // Output content
+                ])
+                .split(chunks[1]);
+
+            // Render task tabs at top
+            let task_tabs = OutputPanel::render_task_tabs(
+                &app.tasks,
+                app.output_task_id.as_deref(),
+                output_chunks[0].width,
+            );
+            frame.render_widget(task_tabs, output_chunks[0]);
+
+            // Render output content
             let scroll = if app.output_auto_follow {
                 app.output_lines.len() as u16
             } else {
@@ -67,13 +85,10 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
                 app.output_task_id.as_deref(),
                 app.verbosity,
                 scroll,
+                app.tasks.len(),
+                &|id: &str| app.output_by_task.contains_key(id),
             );
-            frame.render_widget(paragraph, chunks[1]);
-
-            // Render output task indicator
-            if let Some(task_id) = &app.output_task_id {
-                render_output_task_indicator(frame, task_id, app.tasks.len());
-            }
+            frame.render_widget(paragraph, output_chunks[1]);
         }
         Tab::Questions => {
             // Render the questions panel

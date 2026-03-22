@@ -86,7 +86,9 @@ impl TaskExecutor {
 
     /// Set the event sender for TUI updates
     pub fn with_event_sender(mut self, sender: Option<EventSender>) -> Self {
-        self.event_sender = sender;
+        self.event_sender = sender.clone();
+        // Also pass to the runner so it can emit Claude output events
+        self.runner = self.runner.with_event_sender(sender);
         self
     }
 
@@ -247,6 +249,7 @@ impl TaskExecutor {
                 Some(TIMEOUT_EXEC),
                 self.config.mcp_config.as_deref(),
                 resume_sid.as_deref(),
+                Some(&task.id),
             )
             .await;
 
@@ -396,7 +399,7 @@ Respond with a brief summary of what you fixed."#,
 
         let result = self
             .runner
-            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None)
+            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
             .await?;
 
         if result.is_error {
