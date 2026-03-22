@@ -51,31 +51,31 @@ impl ReviewReport {
 
         // Header
         output.push_str("══════════════════════════════════════════════════════\n");
-        output.push_str("  📊 Progress Report\n");
+        output.push_str("  📊 进度汇报\n");
         output.push_str("══════════════════════════════════════════════════════\n\n");
 
         // Statistics
         let p = &self.progress;
         output.push_str(&format!(
-            "📈 Stats: {}/{} completed ({:.0}%) | {} pending | {} in_progress | {} failed\n",
+            "📈 统计: {}/{} 已完成 ({:.0}%) | {} 待处理 | {} 执行中 | {} 失败\n",
             p.completed, p.total, p.completion_percent,
             p.pending, p.in_progress, p.failed
         ));
 
         // Time
         if let Some(eta) = self.eta {
-            output.push_str(&format!("⏱️  ETA: {}\n", format_duration(eta)));
+            output.push_str(&format!("⏱️  预计剩余: {}\n", format_duration(eta)));
         }
         output.push('\n');
 
         // Upcoming tasks
         if !self.upcoming_tasks.is_empty() {
-            output.push_str("📋 Upcoming:\n");
+            output.push_str("📋 即将执行:\n");
             for task in self.upcoming_tasks.iter().take(10) {
                 let deps = if task.depends_on.is_empty() {
                     String::new()
                 } else {
-                    format!(" (waiting: {})", task.depends_on.join(", "))
+                    format!(" (等待: {})", task.depends_on.join(", "))
                 };
                 output.push_str(&format!("  • [{}] {}{}\n", task.id, task.title, deps));
             }
@@ -84,20 +84,20 @@ impl ReviewReport {
 
         // Issues
         if !self.issues.is_empty() {
-            output.push_str("⚠️  Issues:\n");
+            output.push_str("⚠️  问题:\n");
             for issue in &self.issues {
                 match issue {
                     Issue::CircularDependency { cycle } => {
-                        output.push_str(&format!("  • Circular: {}\n", cycle.join(" -> ")));
+                        output.push_str(&format!("  • 循环依赖: {}\n", cycle.join(" -> ")));
                     }
                     Issue::MissingDependency { task_id, missing } => {
-                        output.push_str(&format!("  • [{}] Missing: {}\n", task_id, missing));
+                        output.push_str(&format!("  • [{}] 缺少依赖: {}\n", task_id, missing));
                     }
                     Issue::Blocked { task_id, blocked_by } => {
-                        output.push_str(&format!("  • [{}] Blocked by: {}\n", task_id, blocked_by.join(", ")));
+                        output.push_str(&format!("  • [{}] 被阻塞: {}\n", task_id, blocked_by.join(", ")));
                     }
                     Issue::Stalled { task_id, duration_secs } => {
-                        output.push_str(&format!("  • [{}] Stalled {}s\n", task_id, duration_secs));
+                        output.push_str(&format!("  • [{}] 超时 {}秒\n", task_id, duration_secs));
                     }
                 }
             }
