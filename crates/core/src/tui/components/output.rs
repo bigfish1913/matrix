@@ -4,98 +4,33 @@ use crate::tui::app::OutputLine;
 use crate::tui::markdown::render_markdown;
 use crate::tui::VerbosityLevel;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-/// Output panel component with task tabs
+/// Output panel component
 pub struct OutputPanel;
 
 impl OutputPanel {
-    /// Render output panel with task tabs and content
+    /// Render output panel with content
     pub fn render(
         lines: &[OutputLine],
-        task_id: Option<&str>,
         verbosity: VerbosityLevel,
         scroll: usize,
-        task_count: usize,
-        has_output: &dyn Fn(&str) -> bool,
     ) -> Paragraph<'static> {
-        // Build title with task indicator
-        let title = match task_id {
-            Some(id) => format!(" Claude Output [{}] ", id),
-            None => format!(" Claude Output (All {} tasks) ", task_count),
-        };
-
         let width = 80; // Approximate width for markdown wrapping
         let text_lines: Vec<Line> = lines
             .iter()
             .flat_map(|line| Self::format_output_line(line, verbosity, width))
             .collect();
 
+        let title = format!(" Claude Output ({} lines) ", text_lines.len());
+
         Paragraph::new(text_lines)
             .block(Block::default().title(title).borders(Borders::ALL))
             .wrap(Wrap { trim: false })
             .scroll((scroll as u16, 0))
-    }
-
-    /// Render task tabs for output panel
-    pub fn render_task_tabs<'a>(
-        tasks: &'a [crate::tui::app::TaskDisplay],
-        current_task_id: Option<&str>,
-        available_width: u16,
-    ) -> Paragraph<'a> {
-        let mut spans: Vec<Span<'a>> = vec![Span::styled(
-            "Tasks: ",
-            Style::default().fg(Color::DarkGray),
-        )];
-
-        // Add "All" option
-        let is_all = current_task_id.is_none();
-        let all_style = if is_all {
-            Style::default().fg(Color::Yellow).add_modifier(ratatui::style::Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        spans.push(Span::styled(if is_all { "[All]" } else { " All " }, all_style));
-
-        // Add task tabs (limit to fit width)
-        let mut used_width = 10u16; // "Tasks: " + "[All]"
-        for (idx, task) in tasks.iter().enumerate() {
-            if idx >= 9 {
-                spans.push(Span::styled(" ...", Style::default().fg(Color::DarkGray)));
-                break;
-            }
-
-            let tab_text = format!(" {} ", idx + 1);
-            let tab_len = tab_text.len() as u16;
-            let is_current = current_task_id == Some(&task.id);
-
-            let style = if is_current {
-                Style::default().fg(Color::Yellow).add_modifier(ratatui::style::Modifier::BOLD | ratatui::style::Modifier::REVERSED)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            spans.push(Span::styled(tab_text, style));
-            used_width += tab_len;
-
-            if used_width > available_width.saturating_sub(10) {
-                break;
-            }
-        }
-
-        // Add hint
-        spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
-        spans.push(Span::styled(
-            "1-9:task a:all ↑↓:scroll",
-            Style::default().fg(Color::DarkGray),
-        ));
-
-        Paragraph::new(Line::from(spans))
-            .block(Block::default().borders(Borders::BOTTOM))
     }
 
     fn format_output_line(
