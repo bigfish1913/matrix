@@ -2,7 +2,9 @@
 
 use crate::models::TaskStatus;
 use crate::tui::app::{OutputLine, Tab, TaskDisplay, TuiApp};
-use crate::tui::components::{LogsPanel, OutputPanel, QuestionsPanel, StatusBar, TabSwitcher, TasksPanel};
+use crate::tui::components::{
+    LogsPanel, OutputPanel, QuestionsPanel, StatusBar, TabSwitcher, TasksPanel,
+};
 use crate::tui::markdown::render_markdown;
 use ratatui::{
     backend::CrosstermBackend,
@@ -36,6 +38,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         Tab::Logs => {
             let entries = app.log_buffer.get_entries();
             let viewport_height = chunks[1].height.saturating_sub(2);
+            app.logs_viewport_height = viewport_height;
             // When auto-follow is on, scroll to show latest entries
             let scroll = if app.logs_auto_follow {
                 LogsPanel::calculate_auto_scroll(entries.len(), viewport_height)
@@ -154,7 +157,8 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
     // Questions answer dialog
     if app.questions_panel.in_answer_dialog {
         if let Some(question) = app.selected_question().cloned() {
-            app.questions_panel.render_answer_dialog(frame, frame.area(), &question);
+            app.questions_panel
+                .render_answer_dialog(frame, frame.area(), &question);
         }
     }
 

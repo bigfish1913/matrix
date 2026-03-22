@@ -1,11 +1,12 @@
 //! TUI Application state and main loop.
 
 use crate::models::{Question, QuestionStatus, TaskStatus};
+use crate::tui::components::QuestionsPanel;
 use crate::tui::{
     Activity, ClarificationQuestion, ClarificationSender, ConfirmSender, Event, EventReceiver,
-    EventSender, ExecutionState, FileChangeSummary, Key, LogBuffer, LogContext, LogLevel, QuestionSender, VerbosityLevel,
+    EventSender, ExecutionState, FileChangeSummary, Key, LogBuffer, LogContext, LogLevel,
+    QuestionSender, VerbosityLevel,
 };
-use crate::tui::components::QuestionsPanel;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -328,7 +329,8 @@ pub struct TuiApp {
     // Logs
     pub log_buffer: LogBuffer,
     pub logs_scroll: u16,
-    pub logs_auto_follow: bool, // Auto-scroll to bottom on new logs
+    pub logs_auto_follow: bool,    // Auto-scroll to bottom on new logs
+    pub logs_viewport_height: u16, // Viewport height for logs panel
 
     // Questions tab
     pub questions: Vec<Question>,
@@ -398,6 +400,7 @@ impl TuiApp {
             log_buffer: LogBuffer::default(),
             logs_scroll: 0,
             logs_auto_follow: true,
+            logs_viewport_height: 0,
             questions: Vec::new(),
             questions_panel: QuestionsPanel::new(),
             questions_scroll: 0,
@@ -502,7 +505,8 @@ impl TuiApp {
         }
 
         // Add to current view if applicable (show in "all" view or matching task view)
-        let should_add_to_view = self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id);
+        let should_add_to_view =
+            self.output_task_id.is_none() || self.output_task_id.as_ref() == Some(&task_id);
         if should_add_to_view {
             self.output_lines.push(line.clone());
             // Trim current view if needed
@@ -1012,8 +1016,11 @@ impl TuiApp {
             ..Default::default()
         };
 
-        self.log_buffer
-            .push(LogLevel::Info, "━━━ Clarification Summary ━━━".to_string(), context.clone());
+        self.log_buffer.push(
+            LogLevel::Info,
+            "━━━ Clarification Summary ━━━".to_string(),
+            context.clone(),
+        );
 
         for (i, question) in self.clarification.questions.iter().enumerate() {
             let answer = self
@@ -1028,14 +1035,20 @@ impl TuiApp {
             } else {
                 question.question.clone()
             };
-            self.log_buffer
-                .push(LogLevel::Info, format!("Q{}: {}", i + 1, q_display), context.clone());
+            self.log_buffer.push(
+                LogLevel::Info,
+                format!("Q{}: {}", i + 1, q_display),
+                context.clone(),
+            );
             self.log_buffer
                 .push(LogLevel::Info, format!("  → {}", answer), context.clone());
         }
 
-        self.log_buffer
-            .push(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string(), context);
+        self.log_buffer.push(
+            LogLevel::Info,
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string(),
+            context,
+        );
 
         // Auto-scroll logs to show summary
         if self.logs_auto_follow {
@@ -1052,6 +1065,7 @@ impl TuiApp {
             }
             Tab::Logs => {
                 self.logs_scroll = 0;
+                self.logs_auto_follow = true;
             }
             Tab::Questions => {
                 self.questions_scroll = 0;
@@ -1103,13 +1117,15 @@ impl TuiApp {
             }
             Tab::Logs => {
                 let entries = self.log_buffer.get_entries();
-                let max_scroll = entries.len() as u16;
+                let max_scroll = entries
+                    .len()
+                    .saturating_sub(self.logs_viewport_height as usize)
+                    as u16;
                 if self.logs_scroll < max_scroll {
                     self.logs_scroll = self.logs_scroll.saturating_add(1);
                 }
-                // Only re-enable auto-follow if content exceeds assumed viewport height
-                // This prevents "jump to top" when content is short
-                if max_scroll > 15 && self.logs_scroll >= max_scroll.saturating_sub(5) {
+                // Re-enable auto-follow if scrolled to bottom
+                if max_scroll > 0 && self.logs_scroll >= max_scroll.saturating_sub(1) {
                     self.logs_auto_follow = true;
                 }
             }
@@ -1184,7 +1200,11 @@ impl TuiApp {
                     task.description = message;
                 }
             }
-            Event::TaskSummary { task_id, title, modified_files } => {
+            Event::TaskSummary {
+                task_id,
+                title,
+                modified_files,
+            } => {
                 // Log task summary to logs panel
                 self.log_buffer.push(
                     LogLevel::Info,
@@ -1225,11 +1245,8 @@ impl TuiApp {
                         );
                     }
                 }
-                self.log_buffer.push(
-                    LogLevel::Info,
-                    "".to_string(),
-                    LogContext::default(),
-                );
+                self.log_buffer
+                    .push(LogLevel::Info, "".to_string(), LogContext::default());
             }
             Event::ClaudeThinking { task_id, content } => {
                 // Only show thinking in verbose mode
@@ -1280,7 +1297,12 @@ impl TuiApp {
                     self.add_output_line(task_id, line);
                 }
             }
-            Event::ClaudeRequest { task_id: _, prompt: _, model: _, timeout_secs: _ } => {
+            Event::ClaudeRequest {
+                task_id: _,
+                prompt: _,
+                model: _,
+                timeout_secs: _,
+            } => {
                 // Request logs removed - only show Claude responses, not requests
                 // This keeps the output panel clean and focused on actual output
             }
@@ -1400,14 +1422,15 @@ impl TuiApp {
             Event::ProgressReview { report } => {
                 // Log progress review to logs panel
                 for line in report.format().lines() {
-                    self.log_buffer.push(
-                        LogLevel::Info,
-                        line.to_string(),
-                        LogContext::default(),
-                    );
+                    self.log_buffer
+                        .push(LogLevel::Info, line.to_string(), LogContext::default());
                 }
             }
-            Event::AgentQuestion { task_id, question, response_tx } => {
+            Event::AgentQuestion {
+                task_id,
+                question,
+                response_tx,
+            } => {
                 // Add question to our tracking list if not already present
                 let question_found = self.questions.iter().any(|q| q.id == question.id);
                 if !question_found {
@@ -1418,7 +1441,10 @@ impl TuiApp {
                 self.agent_question.question = Some(question);
                 self.agent_question.response_tx = Some(response_tx);
             }
-            Event::QuestionAnswered { question_id, answer } => {
+            Event::QuestionAnswered {
+                question_id,
+                answer,
+            } => {
                 // Log that a question was answered
                 self.log_buffer.push(
                     LogLevel::Info,
@@ -1433,11 +1459,18 @@ impl TuiApp {
                     q.answered_at = Some(chrono::Utc::now());
                 }
             }
-            Event::QuestionAutoDecided { question_id, decision, reason } => {
+            Event::QuestionAutoDecided {
+                question_id,
+                decision,
+                reason,
+            } => {
                 // Log that an agent auto-decided on a non-blocking question
                 self.log_buffer.push(
                     LogLevel::Info,
-                    format!("Question {} auto-decided: {} ({})", question_id, decision, reason),
+                    format!(
+                        "Question {} auto-decided: {} ({})",
+                        question_id, decision, reason
+                    ),
                     LogContext::default(),
                 );
                 // Update the question in our list
