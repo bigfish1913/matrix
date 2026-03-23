@@ -435,57 +435,16 @@ impl Orchestrator {
             _ => "请用中文提问，选项也用中文。优缺点和推荐理由也用中文。",
         };
 
-        let prompt = format!(
-            r#"You are helping plan a software development project.
+        let lang_instruction = super::prompts::get_lang_instruction(&self.config.language);
+        let doc_section = self.config.doc_content
+            .as_ref()
+            .map(|d| format!("DOCUMENT:\n{}", d))
+            .unwrap_or_default();
 
-GOAL: {}
-{}
-
-{}
-
-Generate 3-5 concise, targeted clarifying questions.
-For each question, provide 3-4 common options with their pros and cons.
-Also recommend the best option with a reason.
-
-Respond ONLY with JSON array:
-[
-  {{
-    "question": "Question text?",
-    "options": ["Option 1", "Option 2", "Option 3"],
-    "pros": ["Pro for option 1", "Pro for option 2", "Pro for option 3"],
-    "cons": ["Con for option 1", "Con for option 2", "Con for option 3"],
-    "recommended": 0,
-    "recommendation_reason": "Why this option is recommended"
-  }}
-]
-
-Example:
-[
-  {{
-    "question": "项目使用什么编程语言?",
-    "options": ["Rust", "Python", "JavaScript", "Go"],
-    "pros": ["高性能，内存安全", "开发快速，生态丰富", "前后端通用", "简洁高效，并发强"],
-    "cons": ["学习曲线陡峭", "性能较低", "类型不严格", "生态较小"],
-    "recommended": 0,
-    "recommendation_reason": "Rust提供最佳的性能和安全性，适合长期维护的项目"
-  }},
-  {{
-    "question": "是否需要数据库支持?",
-    "options": ["是，SQLite", "是，PostgreSQL", "不需要", "不确定"],
-    "pros": ["轻量，零配置", "功能强大，可扩展", "简单，无依赖", "稍后决定"],
-    "cons": ["不适合高并发", "需要额外部署", "数据无法持久化", "可能延迟决策"],
-    "recommended": 0,
-    "recommendation_reason": "SQLite简单易用，适合中小型项目快速启动"
-  }}
-]"#,
-            self.config.goal,
-            self.config
-                .doc_content
-                .as_ref()
-                .map(|d| format!("DOCUMENT:\n{}", d))
-                .unwrap_or_default(),
-            lang_instruction
-        );
+        let prompt = super::prompts::CLARIFICATION_PROMPT
+            .replace("{GOAL}", &self.config.goal)
+            .replace("{DOCUMENT}", &doc_section)
+            .replace("{LANG_INSTRUCTION}", lang_instruction);
 
         let result = self
             .executor
@@ -527,10 +486,13 @@ Example:
 
         // Try to extract JSON array from response (may be in markdown code block)
         let json_text = if let Some(json) = extract_json_from_markdown(&result.text) {
+            info!(phase = "clarification", "Extracted JSON from markdown code block");
             json
         } else if let Some(json) = extract_json_array_from_text(&result.text) {
+            info!(phase = "clarification", "Extracted JSON array from text");
             json
         } else {
+            info!(phase = "clarification", "Using raw response as JSON (no extraction needed)");
             result.text.clone()
         };
 
@@ -542,11 +504,48 @@ Example:
                     q
                 }
                 Err(e) => {
-                    warn!(
+                    // Print detailed debug info for JSON parsing failure
+                    error!(
                         phase = "clarification",
-                        "Failed to parse questions JSON: {}", e
+                        "═══════════════════════════════════════════════════════════"
                     );
-                    return Ok(String::new());
+                    error!(
+                        phase = "clarification",
+                        "JSON PARSE ERROR: {}", e
+                    );
+                    error!(
+                        phase = "clarification",
+                        "───────────────────────────────────────────────────────────"
+                    );
+                    error!(
+                        phase = "clarification",
+                        "RAW RESPONSE ({} chars):", result.text.len()
+                    );
+                    error!(
+                        phase = "clarification",
+                        "{}", result.text
+                    );
+                    error!(
+                        phase = "clarification",
+                        "───────────────────────────────────────────────────────────"
+                    );
+                    error!(
+                        phase = "clarification",
+                        "EXTRACTED JSON ({} chars):", json_text.len()
+                    );
+                    error!(
+                        phase = "clarification",
+                        "{}", json_text
+                    );
+                    error!(
+                        phase = "clarification",
+                        "═══════════════════════════════════════════════════════════"
+                    );
+                    // Return error to exit on first JSON parse failure
+                    return Err(Error::ParseError(format!(
+                        "Failed to parse clarification questions JSON: {}",
+                        e
+                    )));
                 }
             };
 

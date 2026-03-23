@@ -61,9 +61,11 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         }
         Tab::Output => {
             // Render output content directly (no task tabs)
+            let viewport_height = chunks[1].height.saturating_sub(2) as usize;
+            let total_lines = app.output_lines.len();
             let scroll = if app.output_auto_follow {
-                // Use MAX to scroll to bottom - the paragraph will clamp it
-                usize::MAX
+                // Calculate proper scroll to show bottom content without overflow
+                total_lines.saturating_sub(viewport_height)
             } else {
                 app.output_scroll
             };
@@ -73,8 +75,11 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         Tab::Events => {
             // Render raw events (verbose mode only)
             let events_text = app.events_buffer.join("\n");
+            let viewport_height = chunks[1].height.saturating_sub(2) as usize;
+            let total_lines = app.events_buffer.len();
             let scroll = if app.events_auto_follow {
-                usize::MAX
+                // Calculate proper scroll to show bottom content without overflow
+                total_lines.saturating_sub(viewport_height)
             } else {
                 app.events_scroll
             };
@@ -89,7 +94,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
                 );
             frame.render_widget(paragraph, chunks[1]);
         }
-        Tab::Questions => {
+        Tab::Meeting => {
             // Render the questions panel
             app.questions_panel.render(frame, chunks[1], &app.questions);
         }

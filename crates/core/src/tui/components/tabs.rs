@@ -15,9 +15,9 @@ impl TabSwitcher {
     /// In normal mode, hide "Claude Output" and "Events" tabs (only show in verbose mode)
     pub fn render(current_tab: Tab, verbosity: VerbosityLevel) -> Tabs<'static> {
         let titles = if verbosity >= VerbosityLevel::Verbose {
-            vec!["Logs", "Tasks", "Output", "Events", "Questions"]
+            vec!["Logs", "Tasks", "Output", "Events", "Meeting"]
         } else {
-            vec!["Logs", "Tasks", "Questions"]
+            vec!["Logs", "Tasks", "Meeting"]
         };
 
         let tabs: Vec<Line<'static>> = titles
@@ -49,11 +49,11 @@ impl TabSwitcher {
                     1 // Events tab not visible, stay on Tasks
                 }
             }
-            Tab::Questions => {
+            Tab::Meeting => {
                 if verbosity >= VerbosityLevel::Verbose {
                     4
                 } else {
-                    2 // Questions is at index 2 when Output/Events are hidden
+                    2 // Meeting is at index 2 when Output/Events are hidden
                 }
             }
         };

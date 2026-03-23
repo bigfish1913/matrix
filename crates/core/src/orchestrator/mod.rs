@@ -4,6 +4,7 @@ mod dependency_graph;
 mod health_monitor;
 #[allow(clippy::module_inception)]
 mod orchestrator;
+pub mod prompts;
 mod task_scheduler;
 
 pub use dependency_graph::DependencyGraph;

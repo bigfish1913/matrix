@@ -178,8 +178,8 @@ pub enum Tab {
     Logs,
     Tasks,
     Output,
-    Events, // Only visible in verbose mode - shows all events
-    Questions,
+    Events,
+    Meeting,
 }
 
 impl Tab {
@@ -188,50 +188,46 @@ impl Tab {
             Self::Logs => Self::Tasks,
             Self::Tasks => Self::Output,
             Self::Output => Self::Events,
-            Self::Events => Self::Questions,
-            Self::Questions => Self::Logs,
+            Self::Events => Self::Meeting,
+            Self::Meeting => Self::Logs,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Logs => Self::Questions,
+            Self::Logs => Self::Meeting,
             Self::Tasks => Self::Logs,
             Self::Output => Self::Tasks,
             Self::Events => Self::Output,
-            Self::Questions => Self::Events,
+            Self::Meeting => Self::Events,
         }
     }
 
     /// Get next visible tab based on verbosity
     pub fn next_visible(self, verbosity: VerbosityLevel) -> Self {
-        let next_tab = self.next();
-        // Skip Output and Events tabs in non-verbose mode
-        if (next_tab == Tab::Output || next_tab == Tab::Events)
-            && verbosity < VerbosityLevel::Verbose
-        {
-            // Skip to Questions (or further if we're past Questions)
-            if next_tab == Tab::Output {
-                Self::Questions // Skip Output and Events
-            } else {
-                next_tab.next() // Skip Events
-            }
-        } else {
-            next_tab
+        let mut next = self.next();
+        // Skip Output and Events in normal mode
+        while !next.is_visible(verbosity) {
+            next = next.next();
         }
+        next
     }
 
     /// Get previous visible tab based on verbosity
     pub fn prev_visible(self, verbosity: VerbosityLevel) -> Self {
-        let prev_tab = self.prev();
-        // Skip Output and Events tabs in non-verbose mode
-        if (prev_tab == Tab::Output || prev_tab == Tab::Events)
-            && verbosity < VerbosityLevel::Verbose
-        {
-            // Skip to Tasks
-            Self::Tasks
-        } else {
-            prev_tab
+        let mut prev = self.prev();
+        // Skip Output and Events in normal mode
+        while !prev.is_visible(verbosity) {
+            prev = prev.prev();
+        }
+        prev
+    }
+
+    /// Check if tab is visible given verbosity level
+    pub fn is_visible(self, verbosity: VerbosityLevel) -> bool {
+        match self {
+            Self::Output | Self::Events => verbosity == VerbosityLevel::Verbose,
+            _ => true,
         }
     }
 }
@@ -715,27 +711,12 @@ impl TuiApp {
                     if let Some(task) = self.selected_task() {
                         self.task_detail.task_id = Some(task.id.clone());
                     }
-                } else if self.current_tab == Tab::Questions {
+                } else if self.current_tab == Tab::Meeting {
                     if let Some(question) = self.selected_question() {
                         if question.status == QuestionStatus::Pending {
                             self.questions_panel.in_answer_dialog = true;
                             self.questions_panel.dialog_selection = 0;
                         }
-                    }
-                }
-            }
-            Key::Char('a') => {
-                if self.current_tab == Tab::Output {
-                    self.switch_output_to_all();
-                }
-            }
-            Key::Char(c) if c.is_ascii_digit() => {
-                // 1-9: Switch to specific task output
-                if self.current_tab == Tab::Output {
-                    let num = c.to_digit(10).unwrap() as usize;
-                    if num > 0 && num <= self.tasks.len() {
-                        let task_id = self.tasks[num - 1].id.clone();
-                        self.switch_output_to_task(&task_id);
                     }
                 }
             }
@@ -939,7 +920,7 @@ impl TuiApp {
                     }
                 }
             }
-            Tab::Questions => {
+            Tab::Meeting => {
                 if delta > 0 {
                     self.questions_scroll = self.questions_scroll.saturating_sub(delta as usize);
                     self.questions_panel.select_up(self.questions.len());
@@ -1182,18 +1163,20 @@ impl TuiApp {
         match self.current_tab {
             Tab::Tasks => self.tasks_scroll = 0,
             Tab::Output => {
-                self.output_scroll = 0;
+                // Set scroll to max to show latest content immediately
+                self.output_scroll = usize::MAX;
                 self.output_auto_follow = true;
             }
             Tab::Events => {
-                self.events_scroll = 0;
+                // Set scroll to max to show latest content immediately
+                self.events_scroll = usize::MAX;
                 self.events_auto_follow = true;
             }
             Tab::Logs => {
                 self.logs_scroll = 0;
                 self.logs_auto_follow = true;
             }
-            Tab::Questions => {
+            Tab::Meeting => {
                 self.questions_scroll = 0;
                 self.questions_panel.state.select(Some(0));
             }
@@ -1219,7 +1202,7 @@ impl TuiApp {
                 self.logs_scroll = self.logs_scroll.saturating_sub(1);
                 self.logs_auto_follow = false;
             }
-            Tab::Questions => {
+            Tab::Meeting => {
                 if self.questions_scroll > 0 {
                     self.questions_scroll -= 1;
                     self.questions_panel.select_up(self.questions.len());
@@ -1268,7 +1251,7 @@ impl TuiApp {
                     self.logs_auto_follow = true;
                 }
             }
-            Tab::Questions => {
+            Tab::Meeting => {
                 if self.questions_scroll < self.questions.len().saturating_sub(1) {
                     self.questions_scroll += 1;
                     self.questions_panel.select_down(self.questions.len());
@@ -1693,14 +1676,14 @@ mod tests {
         assert_eq!(Tab::Logs.next(), Tab::Tasks);
         assert_eq!(Tab::Tasks.next(), Tab::Output);
         assert_eq!(Tab::Output.next(), Tab::Events);
-        assert_eq!(Tab::Events.next(), Tab::Questions);
-        assert_eq!(Tab::Questions.next(), Tab::Logs);
+        assert_eq!(Tab::Events.next(), Tab::Meeting);
+        assert_eq!(Tab::Meeting.next(), Tab::Logs);
 
-        assert_eq!(Tab::Logs.prev(), Tab::Questions);
+        assert_eq!(Tab::Logs.prev(), Tab::Meeting);
         assert_eq!(Tab::Tasks.prev(), Tab::Logs);
         assert_eq!(Tab::Output.prev(), Tab::Tasks);
         assert_eq!(Tab::Events.prev(), Tab::Output);
-        assert_eq!(Tab::Questions.prev(), Tab::Events);
+        assert_eq!(Tab::Meeting.prev(), Tab::Events);
     }
 
     #[test]
