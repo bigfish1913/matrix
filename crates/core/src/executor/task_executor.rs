@@ -625,24 +625,35 @@ Respond with a brief summary of what you fixed."#,
                 None,
                 Some(&task.id),
             )
-            .await?;
+            .await;
 
-        if result.is_error {
-            warn!(error = %result.text, "Fix attempt failed");
-            return Ok(false);
+        match result {
+            Ok(result) if result.is_error => {
+                warn!(error = %result.text, "Fix attempt failed");
+                Ok(false)
+            }
+            Ok(result) => {
+                // Emit token usage update if available
+                if let Some(usage) = &result.usage {
+                    self.emit_event(Event::TokenUsageUpdate {
+                        task_id: task.id.clone(),
+                        tokens_used: usage.total_tokens,
+                    });
+                    info!(task_id = %task.id, tokens = usage.total_tokens, "Token usage (fix)");
+                }
+                info!(task_id = %task.id, stage = ?stage, summary = %result.text, "Fix applied");
+                Ok(true)
+            }
+            Err(Error::Timeout(_)) => {
+                warn!(task_id = %task.id, stage = ?stage, "Fix timeout, skipping");
+                self.emit_event(Event::TaskProgress {
+                    id: task.id.clone(),
+                    message: format!("⚠️ Fix timeout, skipping {} fix", stage.description()),
+                });
+                Ok(false) // Skip fix on timeout, don't block the pipeline
+            }
+            Err(e) => Err(e),
         }
-
-        // Emit token usage update if available
-        if let Some(usage) = &result.usage {
-            self.emit_event(Event::TokenUsageUpdate {
-                task_id: task.id.clone(),
-                tokens_used: usage.total_tokens,
-            });
-            info!(task_id = %task.id, tokens = usage.total_tokens, "Token usage (fix)");
-        }
-
-        info!(task_id = %task.id, stage = ?stage, summary = %result.text, "Fix applied");
-        Ok(true)
     }
 
     /// Run dev server and check for startup errors
