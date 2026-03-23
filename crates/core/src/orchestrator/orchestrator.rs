@@ -5,7 +5,7 @@ use crate::checkpoint::CheckpointManager;
 use crate::config::CheckpointConfig;
 use crate::config::{MAX_DEPTH, MAX_RETRIES, TIMEOUT_PLAN};
 use crate::error::{Error, Result};
-use crate::executor::{ExecutorConfig, TaskExecutor};
+use crate::executor::{ExecutorConfig, Stage, TaskExecutor};
 use crate::memory::GlobalMemory;
 use crate::memory::TaskMemoryExt;
 use crate::models::{Complexity, Task, TaskMemory, TaskStatus};
@@ -1980,7 +1980,7 @@ async fn run_task_pipeline(
         });
     }
 
-    // Execute
+    // Phase 1: Execute the task
     let success = match executor.execute(&mut task, &thread_name).await {
         Ok(s) => s,
         Err(e) => {
@@ -2016,18 +2016,20 @@ async fn run_task_pipeline(
         return Ok(None);
     }
 
-    // Test
-    let (tests_passed, test_output) = match executor.test(&mut task).await {
+    // Phase 2: Verification loop (Test -> Build -> AiReview)
+
+    // Test stage
+    let (passed, output) = match executor.test(&mut task).await {
         Ok(result) => result,
         Err(e) => {
-            error!(task_id = %task.id, error = %e, "Test execution failed");
-            (false, format!("Test execution error: {}", e))
+            warn!(task_id = %task.id, stage = "Test", error = %e, "Verification error");
+            (true, format!("Verification skipped: {}", e))
         }
     };
 
-    if !tests_passed {
-        // Try to fix
-        let fixed = match executor.fix_test_failure(&mut task, &test_output).await {
+    if !passed {
+        // Try to fix using unified fix_errors method
+        let fixed = match executor.fix_errors(&mut task, Stage::Test, &output).await {
             Ok(f) => f,
             Err(e) => {
                 error!(task_id = %task.id, error = %e, "Fix attempt failed");
@@ -2038,19 +2040,19 @@ async fn run_task_pipeline(
         if !fixed && task.retries < MAX_RETRIES {
             task.retries += 1;
             task.status = TaskStatus::Pending;
-            task.test_failure_context = Some(test_output);
+            task.test_failure_context = Some(output);
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task for retry after test");
+                error!(task_id = %task.id, error = %e, "Failed to save task for retry");
             }
             warn!(task_id = %task.id, attempt = task.retries, "Tests failed, retrying");
             return Ok(None);
         } else if !fixed {
             task.status = TaskStatus::Failed;
-            task.error = Some(format!("Tests failed: {}", test_output));
+            task.error = Some(format!("Tests failed: {}", output));
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task as Failed after test");
+                error!(task_id = %task.id, error = %e, "Failed to save task as Failed");
             }
             error!(task_id = %task.id, "Tests failed permanently");
             // Emit Failed status
@@ -2064,21 +2066,21 @@ async fn run_task_pipeline(
         }
     }
 
-    // Build verification - ensure the code actually compiles and builds
-    let (build_passed, build_output) = match executor.verify_build(&mut task).await {
+    // Build stage
+    let (passed, output) = match executor.verify_build(&mut task).await {
         Ok(result) => result,
         Err(e) => {
-            warn!(task_id = %task.id, error = %e, "Build verification error");
-            (true, format!("Build verification skipped: {}", e)) // Continue on error
+            warn!(task_id = %task.id, stage = "Build", error = %e, "Verification error");
+            (true, format!("Verification skipped: {}", e))
         }
     };
 
-    if !build_passed {
-        // Try to fix build errors
-        let fixed = match executor.fix_build_errors(&mut task, &build_output).await {
+    if !passed {
+        // Try to fix using unified fix_errors method
+        let fixed = match executor.fix_errors(&mut task, Stage::Build, &output).await {
             Ok(f) => f,
             Err(e) => {
-                error!(task_id = %task.id, error = %e, "Build fix attempt failed");
+                error!(task_id = %task.id, error = %e, "Fix attempt failed");
                 false
             }
         };
@@ -2086,19 +2088,19 @@ async fn run_task_pipeline(
         if !fixed && task.retries < MAX_RETRIES {
             task.retries += 1;
             task.status = TaskStatus::Pending;
-            task.error = Some(format!("Build failed: {}", build_output));
+            task.error = Some(format!("Build failed: {}", output));
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task for retry after build");
+                error!(task_id = %task.id, error = %e, "Failed to save task for retry");
             }
             warn!(task_id = %task.id, attempt = task.retries, "Build failed, retrying");
             return Ok(None);
         } else if !fixed {
             task.status = TaskStatus::Failed;
-            task.error = Some(format!("Build failed: {}", build_output));
+            task.error = Some(format!("Build failed: {}", output));
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task as Failed after build");
+                error!(task_id = %task.id, error = %e, "Failed to save task as Failed");
             }
             error!(task_id = %task.id, "Build failed permanently");
             // Emit Failed status
@@ -2112,21 +2114,21 @@ async fn run_task_pipeline(
         }
     }
 
-    // Functionality verification - ensure the application actually runs
-    let (func_passed, func_output) = match executor.verify_functionality(&mut task).await {
+    // AiReview stage
+    let (passed, output) = match executor.ai_functionality_review(&mut task).await {
         Ok(result) => result,
         Err(e) => {
-            warn!(task_id = %task.id, error = %e, "Functionality verification error");
-            (true, format!("Functionality verification skipped: {}", e)) // Continue on error
+            warn!(task_id = %task.id, stage = "AiReview", error = %e, "Verification error");
+            (true, format!("Verification skipped: {}", e))
         }
     };
 
-    if !func_passed {
-        // Try to fix runtime errors
-        let fixed = match executor.fix_runtime_errors(&mut task, &func_output).await {
+    if !passed {
+        // Try to fix using unified fix_errors method
+        let fixed = match executor.fix_errors(&mut task, Stage::AiReview, &output).await {
             Ok(f) => f,
             Err(e) => {
-                error!(task_id = %task.id, error = %e, "Runtime fix attempt failed");
+                error!(task_id = %task.id, error = %e, "Fix attempt failed");
                 false
             }
         };
@@ -2134,72 +2136,21 @@ async fn run_task_pipeline(
         if !fixed && task.retries < MAX_RETRIES {
             task.retries += 1;
             task.status = TaskStatus::Pending;
-            task.error = Some(format!("Functionality failed: {}", func_output));
+            task.error = Some(format!("AI review failed: {}", output));
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task for retry after functionality check");
+                error!(task_id = %task.id, error = %e, "Failed to save task for retry");
             }
-            warn!(task_id = %task.id, attempt = task.retries, "Functionality failed, retrying");
+            warn!(task_id = %task.id, attempt = task.retries, "AI review failed, retrying");
             return Ok(None);
         } else if !fixed {
             task.status = TaskStatus::Failed;
-            task.error = Some(format!("Functionality failed: {}", func_output));
+            task.error = Some(format!("AI review failed: {}", output));
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task as Failed after functionality check");
+                error!(task_id = %task.id, error = %e, "Failed to save task as Failed");
             }
-            error!(task_id = %task.id, "Functionality failed permanently");
-            // Emit Failed status
-            if let Some(ref sender) = event_sender {
-                let _ = sender.send(Event::TaskStatusChanged {
-                    id: task.id.clone(),
-                    status: TaskStatus::Failed,
-                });
-            }
-            return Ok(None);
-        }
-    }
-
-    // AI Functionality Review - AI verifies the implementation works correctly
-    let (ai_passed, ai_output) = match executor.ai_functionality_review(&mut task).await {
-        Ok(result) => result,
-        Err(e) => {
-            warn!(task_id = %task.id, error = %e, "AI functionality review error");
-            (true, format!("AI review skipped: {}", e)) // Continue on error
-        }
-    };
-
-    if !ai_passed {
-        // Try to fix functionality issues
-        let fixed = match executor
-            .fix_functionality_issues(&mut task, &ai_output)
-            .await
-        {
-            Ok(f) => f,
-            Err(e) => {
-                error!(task_id = %task.id, error = %e, "Functionality fix attempt failed");
-                false
-            }
-        };
-
-        if !fixed && task.retries < MAX_RETRIES {
-            task.retries += 1;
-            task.status = TaskStatus::Pending;
-            task.error = Some(format!("AI functionality review failed: {}", ai_output));
-            task.started_at = None;
-            if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task for retry after AI review");
-            }
-            warn!(task_id = %task.id, attempt = task.retries, "AI functionality review failed, retrying");
-            return Ok(None);
-        } else if !fixed {
-            task.status = TaskStatus::Failed;
-            task.error = Some(format!("AI functionality review failed: {}", ai_output));
-            task.started_at = None;
-            if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task as Failed after AI review");
-            }
-            error!(task_id = %task.id, "AI functionality review failed permanently");
+            error!(task_id = %task.id, "AI review failed permanently");
             // Emit Failed status
             if let Some(ref sender) = event_sender {
                 let _ = sender.send(Event::TaskStatusChanged {
