@@ -4,16 +4,9 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to release (e.g., 1.0.0)'
-        required: true
-        type: string
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
 
 jobs:
   build:
@@ -23,97 +16,54 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive: tar.gz
-          # Linux ARM64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            archive: tar.gz
-          # macOS Intel
           - os: macos-latest
             target: x86_64-apple-darwin
-            archive: tar.gz
-          # macOS Apple Silicon
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: tar.gz
-          # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: zip
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Configure cross-compilation (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          mkdir -p ~/.cargo
-          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
-          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
+          key: ${{ matrix.target }}
 
-      - name: Build binary
+      - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Unix)
+      - name: Strip binary
         if: runner.os != 'Windows'
         run: strip target/${{ matrix.target }}/release/matrix
 
       - name: Get version
         id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
         shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-          fi
 
-      - name: Create archive (Unix)
+      - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../matrix-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz matrix
-          cd ../../..
+          tar -czvf ../../../matrix-v${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz matrix
 
-      - name: Create archive (Windows)
+      - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../matrix-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.zip matrix.exe
-          cd ../../..
+          7z a ../../../matrix-v${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.zip matrix.exe
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: matrix-${{ matrix.target }}
-          path: |
-            matrix-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.*
+          path: matrix-v${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.*
 
   release:
     name: Create Release
@@ -123,22 +73,15 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Get version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "TAG=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
+          echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: matrix-*
@@ -146,21 +89,6 @@ jobs:
 
       - name: List artifacts
         run: ls -la artifacts/
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          # Generate changelog from git commits
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-          if [ -n "$PREVIOUS_TAG" ]; then
-            echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-            git log --pretty=format:"- %s (%h)" $PREVIOUS_TAG..HEAD >> $GITHUB_OUTPUT
-            echo "" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-          else
-            echo "CHANGELOG=Initial release" >> $GITHUB_OUTPUT
-          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -170,57 +98,29 @@ jobs:
           body: |
             ## Matrix v${{ steps.version.outputs.VERSION }}
 
-            ### 下载安装
+            ### Downloads
 
-            | 平台 | 架构 | 下载 |
-            |------|------|------|
-            | Linux | x86_64 | `matrix-${{ steps.version.outputs.VERSION }}-x86_64-unknown-linux-gnu.tar.gz` |
-            | Linux | ARM64 | `matrix-${{ steps.version.outputs.VERSION }}-aarch64-unknown-linux-gnu.tar.gz` |
-            | macOS | Intel | `matrix-${{ steps.version.outputs.VERSION }}-x86_64-apple-darwin.tar.gz` |
-            | macOS | Apple Silicon | `matrix-${{ steps.version.outputs.VERSION }}-aarch64-apple-darwin.tar.gz` |
-            | Windows | x86_64 | `matrix-${{ steps.version.outputs.VERSION }}-x86_64-pc-windows-msvc.zip` |
+            | Platform | Architecture | File |
+            |----------|--------------|------|
+            | Linux | x86_64 | `matrix-v${{ steps.version.outputs.VERSION }}-x86_64-unknown-linux-gnu.tar.gz` |
+            | macOS | Intel | `matrix-v${{ steps.version.outputs.VERSION }}-x86_64-apple-darwin.tar.gz` |
+            | macOS | Apple Silicon | `matrix-v${{ steps.version.outputs.VERSION }}-aarch64-apple-darwin.tar.gz` |
+            | Windows | x86_64 | `matrix-v${{ steps.version.outputs.VERSION }}-x86_64-pc-windows-msvc.zip` |
 
-            ### 安装方法
+            ### Install
 
             **Linux/macOS:**
             ```bash
-            # 下载对应平台的压缩包
             tar -xzf matrix-*.tar.gz
             sudo mv matrix /usr/local/bin/
             ```
 
             **Windows:**
-            ```powershell
-            # 解压 zip 文件
-            # 将 matrix.exe 移动到 PATH 目录
-            ```
-
-            ### 更新日志
-
-            ${{ steps.changelog.outputs.CHANGELOG }}
+            Extract the zip file and add `matrix.exe` to your PATH.
 
             ---
 
-            **完整文档**: https://github.com/bigfish1913/matrix#readme
-          files: |
-            artifacts/matrix-${{ steps.version.outputs.VERSION }}-*
+            **Documentation**: https://github.com/bigfish1913/matrix#readme
+          files: artifacts/*
           draft: false
           prerelease: false
-          generate_release_notes: false
-
-  # 可选：发布到 crates.io
-  publish-crate:
-    name: Publish to crates.io
-    needs: release
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
