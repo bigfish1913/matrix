@@ -369,6 +369,8 @@ matrix "实现这些功能" ./project --doc specs.md
 | **Logs** | 实时日志追踪（INFO/WARN/ERROR），智能过滤重复内容 |
 | **Tasks** | 任务列表（支持树形/列表视图），Enter 查看详情 |
 | **Claude Output** | Claude 原始输出，支持 Markdown 渲染 |
+| **Events** | 详细事件流（Verbose 模式调试用） |
+| **Meeting** | 会议记录（阻塞问题汇总） |
 
 ### 快捷键
 
@@ -389,7 +391,7 @@ matrix "实现这些功能" ./project --doc specs.md
 ### 状态栏
 
 ```
-v0.1.9 Generating ⠋ | Task:00:05 | Total:02:15 | 5/12 | glm-5 | 3 agents | ?:Help q:Quit
+v1.0.0 Generating ⠋ | Task:00:05 | Total:02:15 | 5/12 | glm-5 | 3 agents | ?:Help q:Quit
        ↑        ↑           ↑              ↑       ↑        ↑
     状态版本  动画      当前任务时间    总时间   进度    模型   Agent数
 ```
@@ -413,7 +415,11 @@ matrix/
 │   │   │   ├── question.rs        # 提问模型
 │   │   │   └── manifest.rs        # 项目清单
 │   │   ├── orchestrator/   # 主编排器
-│   │   │   └── orchestrator.rs    # 调度器 & 状态管理
+│   │   │   ├── orchestrator.rs    # 调度器 & 状态管理
+│   │   │   ├── dependency_graph.rs # 任务依赖图 & 循环检测
+│   │   │   ├── health_monitor.rs  # 阻塞任务健康监控
+│   │   │   ├── task_scheduler.rs  # 任务调度 & 槽位池
+│   │   │   └── prompts.rs         # AI 提示词模板
 │   │   ├── store/          # 持久化
 │   │   │   ├── task_store.rs      # 任务存储 (JSON)
 │   │   │   └── question_store.rs  # 问题存储
@@ -432,6 +438,16 @@ matrix/
 ├── Taskfile.yml            # 构建自动化
 └── docs/                   # 文档
 ```
+
+### 编排器模块说明
+
+| 模块 | 功能 |
+|------|------|
+| `orchestrator.rs` | 主调度器，协调所有阶段执行 |
+| `dependency_graph.rs` | 任务依赖关系管理，循环依赖检测 |
+| `health_monitor.rs` | 监控阻塞任务，生成会议清单 |
+| `task_scheduler.rs` | 槽位池管理，任务并行调度 |
+| `prompts.rs` | 集中管理 AI 提示词模板 |
 
 ---
 

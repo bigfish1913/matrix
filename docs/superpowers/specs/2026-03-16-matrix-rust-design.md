@@ -61,7 +61,11 @@ matrix/
 │   │       │   └── task_executor.rs
 │   │       └── orchestrator/
 │   │           ├── mod.rs
-│   │           └── orchestrator.rs
+│   │           ├── orchestrator.rs
+│   │           ├── dependency_graph.rs
+│   │           ├── health_monitor.rs
+│   │           ├── task_scheduler.rs
+│   │           └── prompts.rs
 │   ├── cli/                      # 命令行界面
 │   │   ├── Cargo.toml
 │   │   └── src/main.rs
@@ -83,7 +87,7 @@ pub struct Task {
     pub description: String,             // 详细描述
     pub status: TaskStatus,              // pending|in_progress|completed|failed|skipped
     pub parent_id: Option<String>,       // 父任务ID（拆分时）
-    pub depth: u32,                      // 拆分深度（最大3）
+    pub depth: u32,                      // 拆分深度（最大5）
     pub complexity: Complexity,          // unknown|simple|complex
     pub retries: u32,                    // 重试次数
     pub session_id: Option<String>,      // Claude 会话ID
@@ -127,6 +131,16 @@ pub struct Task {
 - Phase 3: 执行、测试、修复
 - Phase 4: Git 提交
 - Phase 5: 最终测试和总结
+
+#### 编排器子模块
+
+| 模块 | 功能 |
+|------|------|
+| `orchestrator.rs` | 主调度器，协调所有阶段执行 |
+| `dependency_graph.rs` | 任务依赖关系管理，循环依赖检测（DFS 着色算法） |
+| `health_monitor.rs` | 监控阻塞任务，生成会议清单（Meeting 清单） |
+| `task_scheduler.rs` | 槽位池管理，任务并行调度（SlotPool + TaskScheduler） |
+| `prompts.rs` | 集中管理 AI 提示词模板（语言配置、JSON 格式约束） |
 
 ## 执行流水线
 
@@ -194,7 +208,7 @@ Options:
 ## 配置常量
 
 ```rust
-pub const MAX_DEPTH: u32 = 3;              // 最大拆分深度
+pub const MAX_DEPTH: u32 = 5;              // 最大拆分深度
 pub const MAX_RETRIES: u32 = 3;            // 最大重试次数
 pub const TIMEOUT_PLAN: u64 = 120;         // 规划超时（秒）
 pub const TIMEOUT_EXEC: u64 = 3600;        // 执行超时（秒）
