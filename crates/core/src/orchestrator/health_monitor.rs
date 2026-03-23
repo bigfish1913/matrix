@@ -23,7 +23,8 @@ pub struct HealthConfig {
 impl Default for HealthConfig {
     fn default() -> Self {
         Self {
-            stall_threshold_minutes: 10,
+            // Increased from 10 to 30 minutes since AI review can take a long time
+            stall_threshold_minutes: 30,
             warning_throttle_secs: 30,
         }
     }
@@ -182,14 +183,14 @@ mod tests {
     #[test]
     fn test_health_config_default() {
         let config = HealthConfig::default();
-        assert_eq!(config.stall_threshold_minutes, 10);
+        assert_eq!(config.stall_threshold_minutes, 30);
         assert_eq!(config.warning_throttle_secs, 30);
     }
 
     #[test]
     fn test_health_monitor_new() {
         let monitor = HealthMonitor::new();
-        assert_eq!(monitor.config().stall_threshold_minutes, 10);
+        assert_eq!(monitor.config().stall_threshold_minutes, 30);
         assert_eq!(monitor.config().warning_throttle_secs, 30);
         assert!(monitor.last_warning.is_none());
     }
