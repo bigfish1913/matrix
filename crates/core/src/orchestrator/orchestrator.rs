@@ -1837,19 +1837,20 @@ OR if splitting needed:
         let all_tasks = self.store.all_tasks().await?;
         let mut reset_count = 0;
         let now = Utc::now();
-        let stall_threshold_minutes = 10; // Consider tasks stalled after 10 minutes (match checkpoint)
+        let stall_threshold_minutes = 10; // Consider tasks stalled after 10 minutes of no activity
 
         for mut task in all_tasks {
             if task.status != TaskStatus::InProgress {
                 continue;
             }
 
-            // Check if task has been InProgress for too long
-            let is_stalled = if let Some(started) = task.started_at {
-                let elapsed = now.signed_duration_since(started);
+            // Check if task has had no activity for too long
+            // Use last_activity_at if available, otherwise fall back to started_at
+            let is_stalled = if let Some(activity_time) = task.last_activity_at.or(task.started_at) {
+                let elapsed = now.signed_duration_since(activity_time);
                 elapsed.num_minutes() > stall_threshold_minutes
             } else {
-                // Task is InProgress but has no started_at - definitely stalled
+                // Task is InProgress but has no activity time - definitely stalled
                 true
             };
 
@@ -1857,6 +1858,7 @@ OR if splitting needed:
                 warn!(task_id = %task.id, "Resetting stalled task to Pending");
                 task.status = TaskStatus::Pending;
                 task.started_at = None;
+                task.last_activity_at = None;
                 if let Err(e) = self.store.save_task(&task).await {
                     error!(task_id = %task.id, error = %e, "Failed to reset stalled task");
                 } else {
@@ -1956,8 +1958,10 @@ async fn run_task_pipeline(
 ) -> Result<Option<Task>> {
     let thread_name = format!("thread-{}", task.id);
 
-    // Set started_at for stalled detection
-    task.started_at = Some(Utc::now());
+    // Set started_at and last_activity_at for stalled detection
+    let now = Utc::now();
+    task.started_at = Some(now);
+    task.last_activity_at = Some(now);
     if let Err(e) = store.save_task(&task).await {
         error!(task_id = %task.id, error = %e, "Failed to save task as InProgress");
         // Continue anyway - task is in memory and will be processed

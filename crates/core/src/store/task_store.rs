@@ -33,6 +33,15 @@ impl TaskStore {
         Ok(())
     }
 
+    /// Update last_activity_at for a task
+    pub async fn update_last_activity(&self, task_id: &str) -> Result<()> {
+        let mut task = self.load_task(task_id).await?;
+        task.last_activity_at = Some(chrono::Utc::now());
+        self.save_task(&task).await?;
+        debug!(task_id = %task_id, "Updated last_activity_at");
+        Ok(())
+    }
+
     /// Load a task by ID
     pub async fn load_task(&self, id: &str) -> Result<Task> {
         let path = self.tasks_dir.join(format!("{}.json", id));

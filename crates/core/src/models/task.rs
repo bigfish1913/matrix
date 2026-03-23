@@ -103,6 +103,9 @@ pub struct Task {
     /// Task start time (for detecting stalled tasks)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<DateTime<Utc>>,
+    /// Last activity time (updated when receiving Claude output)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<DateTime<Utc>>,
 }
 
 impl Task {
@@ -131,6 +134,7 @@ impl Task {
             is_clarification: false,
             memory: TaskMemory::default(),
             started_at: None,
+            last_activity_at: None,
         }
     }
 
@@ -147,6 +151,7 @@ impl Task {
         task.depth = depth;
         task.memory = TaskMemory::default();
         task.started_at = None;
+        task.last_activity_at = None;
         task
     }
 }

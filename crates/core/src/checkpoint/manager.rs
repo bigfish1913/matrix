@@ -150,7 +150,7 @@ impl CheckpointManager {
         Ok(blocked)
     }
 
-    /// Find stalled tasks (in_progress too long)
+    /// Find stalled tasks (no activity for too long)
     async fn find_stalled_tasks(&self) -> Result<Vec<String>> {
         let tasks = self.store.all_tasks().await?;
         let threshold = Duration::from_secs(self.config.stalled_threshold_secs);
@@ -160,14 +160,14 @@ impl CheckpointManager {
             .iter()
             .filter(|t| t.status == TaskStatus::InProgress)
             .filter_map(|t| {
-                t.started_at.and_then(|started| {
-                    let elapsed = now.signed_duration_since(started).to_std().ok()?;
-                    if elapsed > threshold {
-                        Some(t.id.clone())
-                    } else {
-                        None
-                    }
-                })
+                // Use last_activity_at if available, otherwise fall back to started_at
+                let activity_time = t.last_activity_at.or(t.started_at)?;
+                let elapsed = now.signed_duration_since(activity_time).to_std().ok()?;
+                if elapsed > threshold {
+                    Some(t.id.clone())
+                } else {
+                    None
+                }
             })
             .collect();
 
