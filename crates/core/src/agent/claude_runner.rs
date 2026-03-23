@@ -308,134 +308,155 @@ impl ClaudeRunner {
             let mut all_text = String::new();
             let mut raw_lines: Vec<String> = Vec::new();
 
-            while let Some(line) = reader.next_line().await.map_err(|e| {
-                Error::ClaudeCli(format!("Failed to read stdout: {}", e))
-            })? {
-                raw_lines.push(line.clone());
-                
-                // Parse and display each line
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                    // Check for result
-                    if let Some(result) = json.get("result") {
-                        if let Some(text) = result.as_str() {
-                            all_text = text.to_string();
-                            // Send result to TUI via tracing
-                            info!(target: "claude", "[Result] {}", text);
-                            // Emit TUI event
-                            if let Some(ref task_id) = task_id_owned {
-                                self.emit_event(Event::ClaudeResult {
-                                    task_id: task_id.to_string(),
-                                    result: text.to_string(),
-                                });
+            // Use a shorter per-line timeout to detect stalled reads
+            let line_timeout = Duration::from_secs(120); // 2 minutes max per line
+
+            loop {
+                // Add timeout for each line read to detect stalled CLI
+                let line_result = tokio::time::timeout(line_timeout, reader.next_line()).await;
+
+                match line_result {
+                    Ok(Ok(Some(line))) => {
+                        raw_lines.push(line.clone());
+
+                        // Parse and display each line
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                            // Check for result
+                            if let Some(result) = json.get("result") {
+                                if let Some(text) = result.as_str() {
+                                    all_text = text.to_string();
+                                    // Send result to TUI via tracing
+                                    info!(target: "claude", "[Result] {}", text);
+                                    // Emit TUI event
+                                    if let Some(ref task_id) = task_id_owned {
+                                        self.emit_event(Event::ClaudeResult {
+                                            task_id: task_id.to_string(),
+                                            result: text.to_string(),
+                                        });
+                                    }
+                                }
                             }
-                        }
-                    }
 
-                    // Check for session_id
-                    if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
-                        if final_result.is_none() {
-                            final_result = Some(ClaudeResult {
-                                text: String::new(),
-                                is_error: false,
-                                session_id: Some(sid.to_string()),
-                                usage: None,
-                            });
-                        } else if let Some(ref mut r) = final_result {
-                            r.session_id = Some(sid.to_string());
-                        }
-                    }
+                            // Check for session_id
+                            if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
+                                if final_result.is_none() {
+                                    final_result = Some(ClaudeResult {
+                                        text: String::new(),
+                                        is_error: false,
+                                        session_id: Some(sid.to_string()),
+                                        usage: None,
+                                    });
+                                } else if let Some(ref mut r) = final_result {
+                                    r.session_id = Some(sid.to_string());
+                                }
+                            }
 
-                    // Check for is_error
-                    if let Some(is_error) = json.get("is_error").and_then(|v| v.as_bool()) {
-                        if let Some(ref mut r) = final_result {
-                            r.is_error = is_error;
-                        }
-                    }
+                            // Check for is_error
+                            if let Some(is_error) = json.get("is_error").and_then(|v| v.as_bool()) {
+                                if let Some(ref mut r) = final_result {
+                                    r.is_error = is_error;
+                                }
+                            }
 
-                    // Check for usage (token counts)
-                    if let Some(usage_obj) = json.get("usage").and_then(|v| v.as_object()) {
-                        let input_tokens = usage_obj
-                            .get("input_tokens")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u32;
-                        let output_tokens = usage_obj
-                            .get("output_tokens")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u32;
-                        let usage = TokenUsage::new(input_tokens, output_tokens);
+                            // Check for usage (token counts)
+                            if let Some(usage_obj) = json.get("usage").and_then(|v| v.as_object()) {
+                                let input_tokens = usage_obj
+                                    .get("input_tokens")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0) as u32;
+                                let output_tokens = usage_obj
+                                    .get("output_tokens")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0) as u32;
+                                let usage = TokenUsage::new(input_tokens, output_tokens);
 
-                        if let Some(ref mut r) = final_result {
-                            r.usage = Some(usage.clone());
-                        }
+                                if let Some(ref mut r) = final_result {
+                                    r.usage = Some(usage.clone());
+                                }
 
-                        // Emit token usage update event
-                        if let Some(ref task_id) = task_id_owned {
-                            self.emit_event(Event::TokenUsageUpdate {
-                                task_id: task_id.to_string(),
-                                tokens_used: usage.total_tokens,
-                            });
-                        }
-                    }
+                                // Emit token usage update event
+                                if let Some(ref task_id) = task_id_owned {
+                                    self.emit_event(Event::TokenUsageUpdate {
+                                        task_id: task_id.to_string(),
+                                        tokens_used: usage.total_tokens,
+                                    });
+                                }
+                            }
 
-                    // Check for tool use (for debug output)
-                    if let Some(tool_name) = json.get("tool_name").and_then(|v| v.as_str()) {
-                        info!(target: "claude", "[Tool] {}", tool_name);
-                        // Emit TUI event
-                        if let Some(ref task_id) = task_id_owned {
-                            let tool_input = json.get("tool_input").map(|v| {
-                                v.as_str().map(|s| s.to_string())
-                                    .unwrap_or_else(|| v.to_string())
-                            });
-                            self.emit_event(Event::ClaudeToolUse {
-                                task_id: task_id.to_string(),
-                                tool_name: tool_name.to_string(),
-                                tool_input,
-                            });
-                        }
-                    }
-
-                    // Check for tool output/result
-                    if let Some(output) = json.get("tool_output") {
-                        let output_str = output.as_str().map(|s| s.to_string())
-                            .unwrap_or_else(|| output.to_string());
-                        if let Some(ref task_id) = task_id_owned {
+                            // Check for tool use (for debug output)
                             if let Some(tool_name) = json.get("tool_name").and_then(|v| v.as_str()) {
-                                let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
-                                self.emit_event(Event::ClaudeToolResult {
-                                    task_id: task_id.to_string(),
-                                    tool_name: tool_name.to_string(),
-                                    result: output_str,
-                                    success: !is_error,
-                                });
-                            }
-                        }
-                    }
-
-                    // Check for message content (thinking)
-                    if let Some(content) = json.get("content").and_then(|v| v.as_array()) {
-                        for item in content {
-                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                                info!(target: "claude", "[Thinking] {}", text);
+                                info!(target: "claude", "[Tool] {}", tool_name);
                                 // Emit TUI event
+                                if let Some(ref task_id) = task_id_owned {
+                                    let tool_input = json.get("tool_input").map(|v| {
+                                        v.as_str().map(|s| s.to_string())
+                                            .unwrap_or_else(|| v.to_string())
+                                    });
+                                    self.emit_event(Event::ClaudeToolUse {
+                                        task_id: task_id.to_string(),
+                                        tool_name: tool_name.to_string(),
+                                        tool_input,
+                                    });
+                                }
+                            }
+
+                            // Check for tool output/result
+                            if let Some(output) = json.get("tool_output") {
+                                let output_str = output.as_str().map(|s| s.to_string())
+                                    .unwrap_or_else(|| output.to_string());
+                                if let Some(ref task_id) = task_id_owned {
+                                    if let Some(tool_name) = json.get("tool_name").and_then(|v| v.as_str()) {
+                                        let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        self.emit_event(Event::ClaudeToolResult {
+                                            task_id: task_id.to_string(),
+                                            tool_name: tool_name.to_string(),
+                                            result: output_str,
+                                            success: !is_error,
+                                        });
+                                    }
+                                }
+                            }
+
+                            // Check for message content (thinking)
+                            if let Some(content) = json.get("content").and_then(|v| v.as_array()) {
+                                for item in content {
+                                    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                        info!(target: "claude", "[Thinking] {}", text);
+                                        // Emit TUI event
+                                        if let Some(ref task_id) = task_id_owned {
+                                            self.emit_event(Event::ClaudeThinking {
+                                                task_id: task_id.to_string(),
+                                                content: text.to_string(),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Check for thinking/reasoning field
+                            if let Some(thinking) = json.get("thinking").and_then(|v| v.as_str()) {
+                                info!(target: "claude", "[Thinking] {}", thinking);
                                 if let Some(ref task_id) = task_id_owned {
                                     self.emit_event(Event::ClaudeThinking {
                                         task_id: task_id.to_string(),
-                                        content: text.to_string(),
+                                        content: thinking.to_string(),
                                     });
                                 }
                             }
                         }
                     }
-
-                    // Check for thinking/reasoning field
-                    if let Some(thinking) = json.get("thinking").and_then(|v| v.as_str()) {
-                        info!(target: "claude", "[Thinking] {}", thinking);
-                        if let Some(ref task_id) = task_id_owned {
-                            self.emit_event(Event::ClaudeThinking {
-                                task_id: task_id.to_string(),
-                                content: thinking.to_string(),
-                            });
-                        }
+                    Ok(Ok(None)) => {
+                        // End of stream
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        warn!("Error reading stdout: {}", e);
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout on line read - CLI may be stalled
+                        warn!("Timeout waiting for CLI output (stalled?)");
+                        break;
                     }
                 }
             }
