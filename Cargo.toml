@@ -2,7 +2,6 @@
 members = [
     "crates/core",
     "crates/cli",
-    "workspace",
 ]
 resolver = "2"
 
