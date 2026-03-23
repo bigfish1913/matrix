@@ -12,7 +12,8 @@
       "Bash(cargo install:*)",
       "Bash(git commit:*)",
       "Skill(gsd:new-milestone)",
-      "Skill(gsd:new-milestone:*)"
+      "Skill(gsd:new-milestone:*)",
+      "Bash(task --list)"
     ]
   }
 }
