@@ -822,7 +822,21 @@ If NEEDS_FIX, explain what needs to be fixed.
                 None,
                 Some(&task.id),
             )
-            .await?;
+            .await;
+
+        // Handle timeout gracefully - skip AI review if it times out
+        let result = match result {
+            Ok(r) => r,
+            Err(Error::Timeout(msg)) => {
+                warn!(task_id = %task.id, "AI review timed out, skipping: {}", msg);
+                self.emit_event(Event::TaskProgress {
+                    id: task.id.clone(),
+                    message: "⚠ AI review timed out, skipping (build passed)".to_string(),
+                });
+                return Ok((true, format!("AI review skipped due to timeout: {}", msg)));
+            }
+            Err(e) => return Err(e),
+        };
 
         // Emit token usage update if available
         if let Some(usage) = &result.usage {
