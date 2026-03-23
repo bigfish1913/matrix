@@ -16,6 +16,25 @@ use tokio::fs;
 use tokio::process::Command;
 use tracing::{info, warn};
 
+/// Verification stage for error context
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Test,
+    Build,
+    AiReview,
+}
+
+impl Stage {
+    /// Get human-readable description for this stage
+    pub fn description(&self) -> &'static str {
+        match self {
+            Stage::Test => "test failures",
+            Stage::Build => "compilation/build errors",
+            Stage::AiReview => "functionality issues",
+        }
+    }
+}
+
 /// Parsed question data from agent output
 #[derive(Debug, Clone)]
 pub struct QuestionData {
@@ -666,6 +685,78 @@ Respond with a brief summary of what you fixed."#,
                 Ok((true, format!("Skipped: {}", e)))
             }
         }
+    }
+
+    /// Unified error fix entry point
+    ///
+    /// This replaces the previous separate fix functions:
+    /// - fix_test_failure
+    /// - fix_build_errors
+    /// - fix_runtime_errors
+    /// - fix_functionality_issues
+    pub async fn fix_errors(
+        &self,
+        task: &mut Task,
+        stage: Stage,
+        error: &str,
+    ) -> Result<bool> {
+        info!(task_id = %task.id, stage = ?stage, "Attempting to fix errors");
+        self.emit_event(Event::TaskProgress {
+            id: task.id.clone(),
+            message: format!("🔧 Attempting to fix {}...", stage.description()),
+        });
+
+        let prompt = format!(
+            r#"You are a senior developer fixing {} in a software project.
+
+TASK: {}
+DESCRIPTION: {}
+
+ERRORS:
+{}
+
+CRITICAL INSTRUCTIONS:
+1. Analyze the errors carefully
+2. Fix the root cause, not just symptoms
+3. Ensure fixes don't break existing functionality
+4. Do NOT add placeholder implementations
+
+Fix the errors. Make minimal, targeted changes.
+Respond with a brief summary of what you fixed."#,
+            stage.description(),
+            task.title,
+            task.description,
+            error
+        );
+
+        let result = self
+            .runner
+            .call(
+                &prompt,
+                &self.workspace,
+                Some(TIMEOUT_EXEC),
+                None,
+                None,
+                Some(&task.id),
+            )
+            .await?;
+
+        if result.is_error {
+            warn!(error = %result.text, "Fix attempt failed");
+            return Ok(false);
+        }
+
+        // Emit token usage update if available
+        if let Some(usage) = &result.usage {
+            self.emit_event(Event::TokenUsageUpdate {
+                task_id: task.id.clone(),
+                tokens_used: usage.total_tokens,
+            });
+            info!(task_id = %task.id, tokens = usage.total_tokens, "Token usage (fix)");
+        }
+
+        info!(task_id = %task.id, stage = ?stage, summary = %result.text, "Fix applied");
+        Ok(true)
     }
 
     /// Run dev server and check for startup errors
