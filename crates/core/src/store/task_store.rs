@@ -91,6 +91,15 @@ impl TaskStore {
             .collect())
     }
 
+    /// Get failed tasks
+    pub async fn failed_tasks(&self) -> Result<Vec<Task>> {
+        let tasks = self.all_tasks().await?;
+        Ok(tasks
+            .into_iter()
+            .filter(|t| t.status == TaskStatus::Failed)
+            .collect())
+    }
+
     /// Count tasks by status
     pub async fn count(&self, status: TaskStatus) -> Result<usize> {
         let tasks = self.all_tasks().await?;

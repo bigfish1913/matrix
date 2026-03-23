@@ -125,6 +125,7 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
         &app.elapsed_string(),
         &task_elapsed,
         app.spinner_frame,
+        app.event_count,
         &app.current_model,
         app.verbosity,
         version,

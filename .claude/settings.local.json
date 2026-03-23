@@ -13,7 +13,8 @@
       "Bash(git commit:*)",
       "Skill(gsd:new-milestone)",
       "Skill(gsd:new-milestone:*)",
-      "Bash(task --list)"
+      "Bash(task --list)",
+      "Bash(taskkill //F //IM matrix.exe)"
     ]
   }
 }

@@ -266,9 +266,11 @@ async fn run_tui_loop(
                         });
                     }
                     TuiEvent::Tick => {
-                        // Poll for new orchestrator events (spinner updated on events only)
+                        // Handle tick to update spinner animation
+                        app.handle_tui_event(event);
+                        // Poll for new orchestrator events
                         app.poll_events();
-                        // Always redraw on tick to update elapsed time
+                        // Always redraw on tick to update elapsed time and animation
                         let _ = terminal.draw(|frame| {
                             render_app(frame, app);
                         });

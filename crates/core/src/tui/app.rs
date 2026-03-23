@@ -378,7 +378,9 @@ pub struct TuiApp {
     pub total_tokens: u32,        // Total tokens used across all tasks
 
     // Animation
-    pub spinner_frame: usize, // Current spinner frame
+    pub spinner_frame: usize,       // Current spinner frame
+    pub event_count: usize,         // Event counter for animation
+    pub last_spinner_update: Instant, // Last time spinner was auto-updated
 
     // Tasks
     pub tasks: Vec<TaskDisplay>,
@@ -464,6 +466,8 @@ impl TuiApp {
             current_task_tokens: 0,
             total_tokens: 0,
             spinner_frame: 0,
+            event_count: 0,
+            last_spinner_update: Instant::now(),
             last_pulse_time: None,
             current_activity: None,
             tasks: Vec::new(),
@@ -844,7 +848,8 @@ impl TuiApp {
             crate::tui::TuiEvent::Key(key) => self.handle_key(key),
             crate::tui::TuiEvent::MouseScroll { delta } => self.handle_mouse_scroll(delta),
             crate::tui::TuiEvent::Tick => {
-                // No animation update on tick - only update on actual events
+                // Auto-advance spinner on every tick (idle animation)
+                self.spinner_frame = self.spinner_frame.wrapping_add(1);
             }
             _ => {}
         }
@@ -1272,19 +1277,10 @@ impl TuiApp {
             self.events_scroll = self.events_buffer.len().saturating_sub(1);
         }
 
-        // Only advance spinner on truly important events
-        // TaskProgress events are too frequent, only pulse on state changes
-        match &event {
-            Event::TaskStatusChanged { .. }
-            | Event::ExecutionStateChanged { .. }
-            | Event::TaskCreated { .. }
-            | Event::TaskSummary { .. }
-            | Event::ClaudeResult { .. }
-            | Event::ProgressReview { .. } => {
-                self.spinner_frame = self.spinner_frame.wrapping_add(1);
-            }
-            _ => {} // Don't update spinner for other events
-        }
+        // Count events and advance spinner: 1 event = 1 frame
+        self.event_count = self.event_count.wrapping_add(1);
+        self.spinner_frame = self.spinner_frame.wrapping_add(1);
+        self.last_spinner_update = Instant::now();
 
         match event {
             Event::TaskCreated {

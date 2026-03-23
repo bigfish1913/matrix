@@ -74,6 +74,8 @@ pub struct Orchestrator {
     last_blocked_warning: Option<Instant>,
     /// Last time checkpoint warnings were logged (for throttling)
     last_checkpoint_warning: Option<Instant>,
+    /// Last time progress report was emitted (for periodic reporting)
+    last_report: Option<Instant>,
     /// Question store for persistent question storage
     question_store: Arc<QuestionStore>,
     /// Event receiver for receiving responses from TUI
@@ -142,6 +144,7 @@ impl Orchestrator {
             last_progress: (0, 0, 0, 0),
             last_blocked_warning: None,
             last_checkpoint_warning: None,
+            last_report: None,
             question_store,
             event_receiver,
             pending_question_responses: HashMap::new(),
@@ -349,6 +352,9 @@ impl Orchestrator {
 
         // Run dispatcher
         self.run_dispatcher().await?;
+
+        // Phase 4.5: Retry failed tasks before final tests
+        self.retry_failed_tasks().await?;
 
         // Phase 5: Final tests
         self.run_final_tests().await?;
@@ -1399,6 +1405,40 @@ OR if splitting needed:
         Ok(())
     }
 
+    /// Phase 4.5: Retry failed tasks before final tests
+    async fn retry_failed_tasks(&mut self) -> Result<()> {
+        let failed = self.store.failed_tasks().await?;
+
+        if failed.is_empty() {
+            info!(phase = "retry", "No failed tasks to retry");
+            return Ok(());
+        }
+
+        info!(phase = "retry", count = failed.len(), "Retrying failed tasks before final tests");
+
+        // Reset failed tasks to pending
+        for mut task in failed {
+            info!(task_id = %task.id, "Resetting failed task for retry");
+            task.status = TaskStatus::Pending;
+            task.retries = 0; // Reset retry count for final attempt
+            task.error = None;
+            self.store.save_task(&task).await?;
+        }
+
+        // Run dispatcher again for retried tasks
+        self.run_dispatcher().await?;
+
+        // Report final status
+        let still_failed = self.store.failed_tasks().await?;
+        if !still_failed.is_empty() {
+            warn!(phase = "retry", count = still_failed.len(), "Some tasks still failed after retry");
+        } else {
+            info!(phase = "retry", "All retried tasks completed successfully");
+        }
+
+        Ok(())
+    }
+
     /// Phase 5: Final tests
     async fn run_final_tests(&self) -> Result<()> {
         info!(phase = "testing", "Running final tests...");
@@ -1660,6 +1700,7 @@ OR if splitting needed:
         let completed = self.store.count(TaskStatus::Completed).await.unwrap_or(0);
         let pending = self.store.count(TaskStatus::Pending).await.unwrap_or(0);
         let failed = self.store.count(TaskStatus::Failed).await.unwrap_or(0);
+        let in_progress = self.store.count(TaskStatus::InProgress).await.unwrap_or(0);
 
         let elapsed = self.start_time.map(|t| t.elapsed()).unwrap_or_default();
         let elapsed_str = format_duration(elapsed);
@@ -1667,6 +1708,12 @@ OR if splitting needed:
         // Check if progress has changed since last time
         let current_progress = (completed, pending, failed, total);
         let progress_changed = current_progress != self.last_progress;
+
+        // Check if we should emit a periodic report (every REPORT_INTERVAL_SECS)
+        let should_report = match self.last_report {
+            None => true,
+            Some(last) => last.elapsed().as_secs() >= crate::config::REPORT_INTERVAL_SECS,
+        };
 
         // In TUI mode, use tracing instead of println to avoid interfering with TUI
         // Only log if progress has actually changed to avoid spamming the logs panel
@@ -1677,6 +1724,16 @@ OR if splitting needed:
                     completed, pending, failed, total
                 );
                 self.last_progress = current_progress;
+            }
+
+            // Periodic progress report
+            if should_report {
+                self.last_report = Some(Instant::now());
+                let report = format!(
+                    "📊 Progress Report | ⏱️ {} | ✅ {} done | 🔄 {} running | ⏳ {} pending | ❌ {} failed",
+                    elapsed_str, completed, in_progress, pending, failed
+                );
+                info!("{}", report);
             }
 
             // Only emit ProgressUpdate when progress actually changed

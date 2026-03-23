@@ -26,6 +26,7 @@ impl StatusBar {
         total_elapsed: &str,
         task_elapsed: &Duration,
         spinner_frame: usize,
+        event_count: usize,
         model: &str,
         verbosity: VerbosityLevel,
         version: &str,
@@ -69,18 +70,9 @@ impl StatusBar {
             "○"
         };
 
-        // Spinner animation
-        let spinner = if matches!(
-            state,
-            ExecutionState::Generating
-                | ExecutionState::Clarifying
-                | ExecutionState::Running { .. }
-        ) {
-            let frame = spinner_frame % SPINNER_FRAMES.len();
-            SPINNER_FRAMES[frame]
-        } else {
-            ""
-        };
+        // Spinner animation - always animate
+        let frame = spinner_frame % SPINNER_FRAMES.len();
+        let spinner = SPINNER_FRAMES[frame];
 
         // Activity indicator with pulse marker
         let activity_indicator = if let ExecutionState::Running { activity } = state {
@@ -115,15 +107,21 @@ impl StatusBar {
         // Format task elapsed time
         let task_elapsed_str = format_duration(*task_elapsed);
 
-        // Build task string with spinner
+        // Build task string with spinner and event count
+        let event_display = if event_count > 0 {
+            format!("·{}", event_count)
+        } else {
+            String::new()
+        };
+
         let task_str = if let Some(t) = current_task {
             if !spinner.is_empty() {
-                format!(" {} {}", spinner, t)
+                format!(" {}{} {}", spinner, event_display, t)
             } else {
                 format!(" {}", t)
             }
         } else if !spinner.is_empty() {
-            format!(" {}", spinner)
+            format!(" {}{}", spinner, event_display)
         } else {
             String::new()
         };

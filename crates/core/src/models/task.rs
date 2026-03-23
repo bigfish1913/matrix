@@ -106,6 +106,15 @@ pub struct Task {
     /// Last activity time (updated when receiving Claude output)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<DateTime<Utc>>,
+    /// Per-task timeout in seconds (None = use default TIMEOUT_EXEC)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// Whether this is a meeting task (requires human intervention)
+    #[serde(default)]
+    pub is_meeting: bool,
+    /// Detailed documentation/acceptance criteria
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
 }
 
 impl Task {
@@ -135,6 +144,9 @@ impl Task {
             memory: TaskMemory::default(),
             started_at: None,
             last_activity_at: None,
+            timeout_secs: None,
+            is_meeting: false,
+            documentation: None,
         }
     }
 
@@ -152,6 +164,14 @@ impl Task {
         task.memory = TaskMemory::default();
         task.started_at = None;
         task.last_activity_at = None;
+        task
+    }
+
+    /// Create a meeting task for human intervention
+    pub fn meeting(id: String, title: String, description: String, blocked_task_id: String) -> Self {
+        let mut task = Self::new(id, title, description);
+        task.is_meeting = true;
+        task.depends_on = vec![blocked_task_id];
         task
     }
 }
