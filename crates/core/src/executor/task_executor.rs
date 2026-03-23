@@ -119,6 +119,13 @@ impl TaskExecutor {
         }
     }
 
+    /// Update last activity time for a task
+    async fn update_activity(&self, task_id: &str) {
+        if let Err(e) = self.store.update_last_activity(task_id).await {
+            warn!(task_id = %task_id, error = %e, "Failed to update last_activity_at");
+        }
+    }
+
     /// Emit activity state change
     fn emit_activity(&self, activity: Activity) {
         self.emit_event(Event::ExecutionStateChanged {
@@ -208,6 +215,9 @@ impl TaskExecutor {
 
         info!(task_id = %task.id, title = %task.title, model = %model, "Executing task");
 
+        // Update activity time
+        self.update_activity(&task.id).await;
+
         // Emit activity state for planning
         self.emit_activity(Activity::Planning);
 
@@ -270,6 +280,9 @@ impl TaskExecutor {
                 Some(&task.id),
             )
             .await;
+
+        // Update activity time after API call
+        self.update_activity(&task.id).await;
 
         // Emit completion message
         info!(task_id = %task.id, title = %task.title, "Claude API call completed");
@@ -334,6 +347,7 @@ impl TaskExecutor {
     /// Run tests for a task
     pub async fn test(&self, task: &mut Task) -> Result<(bool, String)> {
         info!(task_id = %task.id, title = %task.title, "Running tests");
+        self.update_activity(&task.id).await;
         self.emit_activity(Activity::Test);
         self.emit_event(Event::TaskProgress {
             id: task.id.clone(),
@@ -449,6 +463,7 @@ Respond with a brief summary of what you fixed."#,
     /// This ensures the generated code is executable, not just tests passing
     pub async fn verify_build(&self, task: &mut Task) -> Result<(bool, String)> {
         info!(task_id = %task.id, title = %task.title, "Verifying build");
+        self.update_activity(&task.id).await;
         self.emit_activity(Activity::Test);
         self.emit_event(Event::TaskProgress {
             id: task.id.clone(),
@@ -613,6 +628,7 @@ Respond with a brief summary of what you fixed."#,
     /// This is the final verification step after build passes
     pub async fn verify_functionality(&self, task: &mut Task) -> Result<(bool, String)> {
         info!(task_id = %task.id, title = %task.title, "Verifying functionality");
+        self.update_activity(&task.id).await;
         self.emit_activity(Activity::Test);
         self.emit_event(Event::TaskProgress {
             id: task.id.clone(),
@@ -816,6 +832,7 @@ Respond with a brief summary of what you fixed."#,
     /// The AI will review the implementation against requirements and verify functionality
     pub async fn ai_functionality_review(&self, task: &mut Task) -> Result<(bool, String)> {
         info!(task_id = %task.id, title = %task.title, "AI functionality review");
+        self.update_activity(&task.id).await;
         self.emit_activity(Activity::Test);
         self.emit_event(Event::TaskProgress {
             id: task.id.clone(),
