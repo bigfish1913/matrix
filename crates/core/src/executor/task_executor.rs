@@ -426,58 +426,6 @@ impl TaskExecutor {
         }
     }
 
-    /// Attempt to fix test failures
-    pub async fn fix_test_failure(&self, task: &mut Task, test_output: &str) -> Result<bool> {
-        info!(task_id = %task.id, title = %task.title, "Attempting to fix test failures");
-        self.emit_event(Event::TaskProgress {
-            id: task.id.clone(),
-            message: "🔧 Attempting to fix test failures...".to_string(),
-        });
-
-        let prompt = format!(
-            r#"You are a senior developer fixing test failures.
-
-TASK: {}
-DESCRIPTION: {}
-
-TEST FAILURES:
-{}
-
-Fix the failing tests. Make minimal, targeted changes.
-Respond with a brief summary of what you fixed."#,
-            task.title, task.description, test_output
-        );
-
-        let result = self
-            .runner
-            .call(
-                &prompt,
-                &self.workspace,
-                Some(TIMEOUT_EXEC),
-                None,
-                None,
-                Some(&task.id),
-            )
-            .await?;
-
-        if result.is_error {
-            warn!(error = %result.text, "Fix attempt failed");
-            return Ok(false);
-        }
-
-        // Emit token usage update if available
-        if let Some(usage) = &result.usage {
-            self.emit_event(Event::TokenUsageUpdate {
-                task_id: task.id.clone(),
-                tokens_used: usage.total_tokens,
-            });
-            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (fix)");
-        }
-
-        info!(task_id = %task.id, title = %task.title, summary = %result.text, "Fix applied");
-        Ok(true)
-    }
-
     /// Verify that the project builds successfully (typecheck + build)
     /// This ensures the generated code is executable, not just tests passing
     pub async fn verify_build(&self, task: &mut Task) -> Result<(bool, String)> {
@@ -579,68 +527,6 @@ Respond with a brief summary of what you fixed."#,
                 }
             }
         }
-    }
-
-    /// Attempt to fix build/compilation errors
-    pub async fn fix_build_errors(&self, task: &mut Task, build_output: &str) -> Result<bool> {
-        info!(task_id = %task.id, title = %task.title, "Attempting to fix build errors");
-        self.emit_event(Event::TaskProgress {
-            id: task.id.clone(),
-            message: "🔧 Attempting to fix build errors...".to_string(),
-        });
-
-        let prompt = format!(
-            r#"You are a senior developer fixing compilation/build errors.
-
-TASK: {}
-DESCRIPTION: {}
-
-BUILD/COMPILATION ERRORS:
-{}
-
-CRITICAL INSTRUCTIONS:
-1. Fix ALL TypeScript/compilation errors shown above
-2. Common issues to check:
-   - Missing type definitions or method signatures
-   - Incorrect API usage (check library documentation)
-   - Type mismatches (null vs undefined, missing properties)
-   - Missing imports or exports
-3. Do NOT add placeholder implementations or TODOs
-4. Ensure the code compiles successfully
-
-Fix the errors. Make minimal, targeted changes.
-Respond with a brief summary of what you fixed."#,
-            task.title, task.description, build_output
-        );
-
-        let result = self
-            .runner
-            .call(
-                &prompt,
-                &self.workspace,
-                Some(TIMEOUT_EXEC),
-                None,
-                None,
-                Some(&task.id),
-            )
-            .await?;
-
-        if result.is_error {
-            warn!(error = %result.text, "Fix attempt failed");
-            return Ok(false);
-        }
-
-        // Emit token usage update if available
-        if let Some(usage) = &result.usage {
-            self.emit_event(Event::TokenUsageUpdate {
-                task_id: task.id.clone(),
-                tokens_used: usage.total_tokens,
-            });
-            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (build fix)");
-        }
-
-        info!(task_id = %task.id, title = %task.title, summary = %result.text, "Build fix applied");
-        Ok(true)
     }
 
     /// Verify that the application runs successfully
@@ -856,69 +742,6 @@ Respond with a brief summary of what you fixed."#,
         }
     }
 
-    /// Attempt to fix runtime errors
-    pub async fn fix_runtime_errors(&self, task: &mut Task, runtime_output: &str) -> Result<bool> {
-        info!(task_id = %task.id, title = %task.title, "Attempting to fix runtime errors");
-        self.emit_event(Event::TaskProgress {
-            id: task.id.clone(),
-            message: "🔧 Attempting to fix runtime errors...".to_string(),
-        });
-
-        let prompt = format!(
-            r#"You are a senior developer fixing runtime errors in an application.
-
-TASK: {}
-DESCRIPTION: {}
-
-RUNTIME ERRORS/LOGS:
-{}
-
-CRITICAL INSTRUCTIONS:
-1. Analyze the runtime errors and fix them
-2. Common runtime issues:
-   - Missing dependencies or imports
-   - Incorrect initialization order
-   - Null/undefined reference errors
-   - Missing configuration
-   - API incompatibilities
-3. Ensure the application can start successfully
-4. Do NOT add placeholder implementations
-
-Fix the errors. Make minimal, targeted changes.
-Respond with a brief summary of what you fixed."#,
-            task.title, task.description, runtime_output
-        );
-
-        let result = self
-            .runner
-            .call(
-                &prompt,
-                &self.workspace,
-                Some(TIMEOUT_EXEC),
-                None,
-                None,
-                Some(&task.id),
-            )
-            .await?;
-
-        if result.is_error {
-            warn!(error = %result.text, "Runtime fix attempt failed");
-            return Ok(false);
-        }
-
-        // Emit token usage update if available
-        if let Some(usage) = &result.usage {
-            self.emit_event(Event::TokenUsageUpdate {
-                task_id: task.id.clone(),
-                tokens_used: usage.total_tokens,
-            });
-            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (runtime fix)");
-        }
-
-        info!(task_id = %task.id, title = %task.title, summary = %result.text, "Runtime fix applied");
-        Ok(true)
-    }
-
     /// AI-driven functionality review
     /// The AI will review the implementation against requirements and verify functionality
     pub async fn ai_functionality_review(&self, task: &mut Task) -> Result<(bool, String)> {
@@ -1033,68 +856,6 @@ If NEEDS_FIX, explain what needs to be fixed.
         }
 
         Ok((passed, review_result))
-    }
-
-    /// Fix issues found during AI functionality review
-    pub async fn fix_functionality_issues(
-        &self,
-        task: &mut Task,
-        review_output: &str,
-    ) -> Result<bool> {
-        info!(task_id = %task.id, title = %task.title, "Fixing functionality issues");
-        self.emit_event(Event::TaskProgress {
-            id: task.id.clone(),
-            message: "🔧 Fixing functionality issues...".to_string(),
-        });
-
-        let prompt = format!(
-            r#"You are a senior developer fixing functionality issues found during QA review.
-
-TASK: {}
-DESCRIPTION: {}
-
-QA REVIEW FINDINGS:
-{}
-
-INSTRUCTIONS:
-1. Analyze each issue carefully
-2. Fix the root cause, not just symptoms
-3. Ensure fixes don't break existing functionality
-4. Test your fixes mentally before submitting
-
-Fix the issues. Make minimal, targeted changes.
-Respond with a brief summary of what you fixed."#,
-            task.title, task.description, review_output
-        );
-
-        let result = self
-            .runner
-            .call(
-                &prompt,
-                &self.workspace,
-                Some(TIMEOUT_EXEC),
-                None,
-                None,
-                Some(&task.id),
-            )
-            .await?;
-
-        if result.is_error {
-            warn!(error = %result.text, "Fix attempt failed");
-            return Ok(false);
-        }
-
-        // Emit token usage update if available
-        if let Some(usage) = &result.usage {
-            self.emit_event(Event::TokenUsageUpdate {
-                task_id: task.id.clone(),
-                tokens_used: usage.total_tokens,
-            });
-            info!(task_id = %task.id, title = %task.title, tokens = usage.total_tokens, "Token usage (functionality fix)");
-        }
-
-        info!(task_id = %task.id, title = %task.title, summary = %result.text, "Functionality fix applied");
-        Ok(true)
     }
 
     // Helper methods
