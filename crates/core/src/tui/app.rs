@@ -840,8 +840,7 @@ impl TuiApp {
             crate::tui::TuiEvent::Key(key) => self.handle_key(key),
             crate::tui::TuiEvent::MouseScroll { delta } => self.handle_mouse_scroll(delta),
             crate::tui::TuiEvent::Tick => {
-                // Advance spinner frame for animation
-                self.spinner_frame = self.spinner_frame.wrapping_add(1);
+                // No animation update on tick - only update on actual events
             }
             _ => {}
         }
@@ -1227,6 +1226,9 @@ impl TuiApp {
 
     /// Process an orchestrator event
     pub fn process_event(&mut self, event: Event) {
+        // Advance spinner frame on any event (breathing light effect)
+        self.spinner_frame = self.spinner_frame.wrapping_add(1);
+
         match event {
             Event::TaskCreated {
                 id,
