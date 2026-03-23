@@ -58,7 +58,7 @@ pub const MAX_MEMORY_SIZE: usize = 3000;
 pub const MAX_DOC_SIZE: usize = 5000;
 
 /// 进度汇报间隔（秒）
-pub const REPORT_INTERVAL_SECS: u64 = 300; // 每5分钟汇报一次
+pub const REPORT_INTERVAL_SECS: u64 = 1800; // 每30分钟汇报一次
 
 /// Checkpoint配置
 #[derive(Debug, Clone)]
