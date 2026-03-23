@@ -1228,16 +1228,18 @@ Implement the task now. Work directly in the workspace directory."#,
                 });
             }
 
-            // Wait for answer
-            match rx.await {
-                Ok(answer) => {
+            // Wait for answer with timeout to prevent permanent blocking
+            let timeout_duration = tokio::time::Duration::from_secs(300); // 5 minutes
+            match tokio::time::timeout(timeout_duration, rx).await {
+                Ok(Ok(answer)) => {
                     // Record answer
                     if let Some(ref store) = self.question_store {
                         store.answer(&question_model.id, &answer).await?;
                     }
                     Ok(answer)
                 }
-                Err(_) => Err(Error::TaskExecution("Question channel closed".to_string())),
+                Ok(Err(_)) => Err(Error::TaskExecution("Question channel closed".to_string())),
+                Err(_) => Err(Error::TaskExecution("Question timeout (5 min)".to_string())),
             }
         } else {
             // Non-blocking: auto-decide with recommended option

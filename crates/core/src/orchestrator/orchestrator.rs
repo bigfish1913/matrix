@@ -1762,7 +1762,9 @@ OR if splitting needed:
                 }
             }
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Sleep longer - task completion triggers immediate re-scheduling
+            // Only wake up periodically for stalled detection and TUI events
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
         Ok(())
@@ -1810,13 +1812,16 @@ OR if splitting needed:
                 self.last_progress = current_progress;
             }
 
-            // Always emit ProgressUpdate event for status bar
-            self.emit_event(Event::ProgressUpdate {
-                completed,
-                total,
-                failed,
-                elapsed,
-            });
+            // Only emit ProgressUpdate when progress actually changed
+            // to avoid flooding the event stream (10Hz loop = 10 events/sec)
+            if progress_changed {
+                self.emit_event(Event::ProgressUpdate {
+                    completed,
+                    total,
+                    failed,
+                    elapsed,
+                });
+            }
         } else {
             println!();
             println!(
