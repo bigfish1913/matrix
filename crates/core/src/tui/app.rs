@@ -1226,8 +1226,14 @@ impl TuiApp {
 
     /// Process an orchestrator event
     pub fn process_event(&mut self, event: Event) {
-        // Advance spinner frame on any event (breathing light effect)
-        self.spinner_frame = self.spinner_frame.wrapping_add(1);
+        // Only advance spinner on important events (not logs)
+        // This creates a breathing light effect that responds to activity
+        match &event {
+            Event::Log { .. } => {} // Don't update spinner on logs
+            _ => {
+                self.spinner_frame = self.spinner_frame.wrapping_add(1);
+            }
+        }
 
         match event {
             Event::TaskCreated {
