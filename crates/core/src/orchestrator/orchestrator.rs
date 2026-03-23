@@ -9,17 +9,17 @@ use crate::executor::{ExecutorConfig, Stage, TaskExecutor};
 use crate::memory::GlobalMemory;
 use crate::memory::TaskMemoryExt;
 use crate::models::{Complexity, Task, TaskMemory, TaskStatus};
+use crate::orchestrator::{DependencyGraph, HealthMonitor, TaskScheduler};
 use crate::store::{QuestionStore, TaskStore};
 use crate::tui::event::{AnswerSender, QuestionSender};
 use crate::tui::topology::{generate_topology_file, TaskTopologyInfo};
 use crate::tui::{ClarificationQuestion, ConfirmSender, Event, EventSender, ExecutionState};
 use chrono::Utc;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
-use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 /// Orchestrator configuration
@@ -1443,219 +1443,89 @@ OR if splitting needed:
     }
 
     async fn run_dispatcher(&mut self) -> Result<()> {
-        // Fix: When num_agents = 1, ensure subtasks can still be executed
-        // Use unified slot pool when agents <= 2
-        let (primary_slots, subtask_slots) = if self.config.num_agents <= 2 {
-            // Unified pool: all agents can process any task
-            (self.config.num_agents, self.config.num_agents)
-        } else {
-            // Split pool: half for primary, half for subtasks
-            let primary = self.config.num_agents.div_ceil(2);
-            let subtask = self.config.num_agents.saturating_sub(primary);
-            (primary, subtask)
-        };
-
+        // Create scheduler and health monitor using new modules
+        let mut scheduler = TaskScheduler::new(self.config.num_agents);
+        let mut health = HealthMonitor::new();
         let deadline = Instant::now() + Duration::from_secs(24 * 3600);
-
-        let mut join_set = JoinSet::new();
-        let mut dispatched_ids: HashSet<String> = HashSet::new();
-        let mut primary_running = 0usize;
-        let mut subtask_running = 0usize;
 
         while Instant::now() < deadline {
             // Process events from TUI (question responses, etc.)
             self.poll_events().await;
 
-            // Collect completed tasks
-            while let Some(res) = join_set.try_join_next() {
-                match res {
-                    Ok((task_id, depth, completed_task)) => {
-                        dispatched_ids.remove(&task_id);
-                        if depth == 0 {
-                            primary_running = primary_running.saturating_sub(1);
-                        } else {
-                            subtask_running = subtask_running.saturating_sub(1);
-                        }
+            // Collect completed tasks from scheduler
+            while let Some((task_id, depth, completed_task)) = scheduler.try_collect() {
+                scheduler.on_task_completed(&task_id, depth);
 
-                        // Update memory on task completion
-                        if let Some(ref task) = completed_task {
-                            self.checkpoint.on_task_completed();
-                            self.update_task_memory(task).await;
+                // Update memory on task completion
+                if let Some(ref task) = completed_task {
+                    self.checkpoint.on_task_completed();
+                    self.update_task_memory(task).await;
 
-                            // Update manifest with latest counts
-                            if let Err(e) = self.store.save_manifest(&self.config.goal).await {
-                                warn!(error = %e, "Failed to update manifest");
-                            }
-
-                            // Check if review is needed
-                            let completed =
-                                self.store.count(TaskStatus::Completed).await.unwrap_or(0);
-                            let total = self.store.total().await.unwrap_or(0);
-                            if self.checkpoint.should_review(completed, total) {
-                                self.show_review_report().await;
-                            }
-                        }
+                    // Update manifest with latest counts
+                    if let Err(e) = self.store.save_manifest(&self.config.goal).await {
+                        warn!(error = %e, "Failed to update manifest");
                     }
-                    Err(e) => {
-                        // Fix: When a task panics or fails in the pipeline, we need to clean up
-                        // The error doesn't contain the task_id, so we can't remove it from dispatched_ids
-                        // However, the task status should still be InProgress in the store
-                        // The stalled task detection will catch and reset it
-                        warn!(error = %e, "Task pipeline error - task may need reset via stalled detection");
+
+                    // Check if review is needed
+                    let completed =
+                        self.store.count(TaskStatus::Completed).await.unwrap_or(0);
+                    let total = self.store.total().await.unwrap_or(0);
+                    if self.checkpoint.should_review(completed, total) {
+                        self.show_review_report().await;
                     }
                 }
             }
 
             self.print_progress().await;
 
-            // Pre-batch checkpoint: validate dependencies and check for issues
-            match self.checkpoint.pre_batch_checkpoint().await {
-                Ok(result) => {
-                    // Throttle checkpoint warnings (only log every 30 seconds)
-                    let should_log_checkpoint = self
-                        .last_checkpoint_warning
-                        .map(|t| t.elapsed().as_secs() >= 30)
-                        .unwrap_or(true);
-                    if should_log_checkpoint && !result.warnings.is_empty() {
-                        self.last_checkpoint_warning = Some(Instant::now());
-                        for warning in &result.warnings {
-                            warn!("Checkpoint warning: {}", warning);
-                        }
-                    }
-                    // Throttle blocked task warnings (only log every 30 seconds)
-                    let should_log_blocked = self
-                        .last_blocked_warning
-                        .map(|t| t.elapsed().as_secs() >= 30)
-                        .unwrap_or(true);
-                    if should_log_blocked && !result.blocked.is_empty() {
-                        self.last_blocked_warning = Some(Instant::now());
-                        for blocked in &result.blocked {
-                            warn!(
-                                task_id = %blocked.task_id,
-                                blocked_by = ?blocked.blocked_by,
-                                "Task blocked by failed dependencies"
-                            );
-                        }
-                    }
-                    for stalled_id in &result.stalled {
-                        warn!(task_id = %stalled_id, "Task appears stalled - resetting to Pending");
-                        // Reset stalled task to Pending for re-dispatch
-                        match self.store.load_task(stalled_id).await {
-                            Ok(mut task) => {
-                                task.status = TaskStatus::Pending;
-                                task.started_at = None;
-                                if let Err(e) = self.store.save_task(&task).await {
-                                    error!(task_id = %stalled_id, error = %e, "Failed to reset stalled task");
-                                } else {
-                                    info!(task_id = %stalled_id, "Reset stalled task to Pending");
-                                }
-                            }
-                            Err(e) => {
-                                error!(task_id = %stalled_id, error = %e, "Failed to load stalled task");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "Pre-batch checkpoint failed");
-                }
+            // Health check: detect and reset stalled tasks
+            let stalled = health.check_stalled(&self.store).await?;
+            if !stalled.is_empty() {
+                info!(count = stalled.len(), "Reset stalled tasks to Pending");
             }
 
-            // Get schedulable tasks
+            // Build dependency graph from all tasks
             let all_tasks = self.store.all_tasks().await?;
-            let completed_ids: HashSet<String> = all_tasks
-                .iter()
-                .filter(|t| t.status == TaskStatus::Completed || t.status == TaskStatus::Skipped)
-                .map(|t| t.id.clone())
-                .collect();
+            let graph = DependencyGraph::build(&all_tasks);
 
-            // Build a map of parent_task -> [subtask_ids] for split tasks
-            let mut subtask_map: HashMap<String, Vec<String>> = HashMap::new();
-            for task in &all_tasks {
-                // Check if this is a subtask (contains a hyphen followed by a number at the end)
-                if let Some(pos) = task.id.rfind('-') {
-                    if pos > 0 {
-                        let parent_id = &task.id[..pos];
-                        // Check if the suffix after the last hyphen is a number
-                        if task.id[pos + 1..].parse::<u32>().is_ok() {
-                            subtask_map
-                                .entry(parent_id.to_string())
-                                .or_default()
-                                .push(task.id.clone());
-                        }
-                    }
-                }
-            }
-
-            // Helper function to check if a dependency is satisfied
-            // A dependency is satisfied if:
-            // 1. The task itself is completed/skipped, OR
-            // 2. The task was split into subtasks and all subtasks are completed/skipped
-            let is_dependency_satisfied = |dep: &str| -> bool {
-                if completed_ids.contains(dep) {
-                    return true;
-                }
-                // Check if this dependency was split into subtasks
-                if let Some(subtasks) = subtask_map.get(dep) {
-                    // All subtasks must be completed
-                    subtasks.iter().all(|s| completed_ids.contains(s))
-                } else {
-                    false
-                }
-            };
-
-            // Fix: The dispatched_ids filter may block retry tasks because:
-            // - A task is dispatched -> ID added to dispatched_ids
-            // - Task fails and is retried -> status reset to Pending
-            // - But ID may still be in dispatched_ids if not cleaned up properly
-            // Solution: Filter by actual task status AND dispatched_ids
+            // Get pending tasks and filter by dependency satisfaction
             let mut pending: Vec<Task> = Vec::new();
             for task in self.store.pending_tasks().await? {
-                // Check if in dispatched_ids (currently being processed)
-                if dispatched_ids.contains(&task.id) {
-                    // If status is Pending but in dispatched_ids, this is a stale entry
-                    // from a previous run that didn't complete properly
+                // Clean up stale dispatched entries
+                if scheduler.is_dispatched(&task.id) {
                     warn!(
                         task_id = %task.id,
-                        "Task is Pending but also in dispatched_ids - cleaning up stale entry"
+                        "Task is Pending but already dispatched - cleaning up stale entry"
                     );
-                    // Remove from dispatched_ids to allow re-dispatch
-                    dispatched_ids.remove(&task.id);
+                    scheduler.remove_dispatched(&task.id);
                 }
 
-                // Check if all dependencies are satisfied
-                if task
-                    .depends_on
-                    .iter()
-                    .all(|dep| is_dependency_satisfied(dep))
-                {
+                // Check if dependencies are satisfied using DependencyGraph
+                if graph.is_satisfied(&task) {
                     pending.push(task);
                 }
             }
 
             // Phase 2: Assess complexity and split if needed
-            // Evaluate each task before dispatching to determine if splitting is needed
             let mut tasks_to_dispatch: Vec<Task> = Vec::new();
             for mut task in pending {
                 // Skip if already being processed
-                if dispatched_ids.contains(&task.id) {
+                if scheduler.is_dispatched(&task.id) {
                     continue;
                 }
-                // Only assess tasks that haven't been assessed yet (complexity is unknown)
-                // or tasks that are potentially complex
+                // Only assess tasks that haven't been assessed yet
                 if task.complexity == Complexity::Unknown || task.complexity == Complexity::Complex
                 {
                     let should_dispatch = self.assess_and_split(&mut task).await?;
                     if should_dispatch {
                         tasks_to_dispatch.push(task);
                     }
-                    // If not should_dispatch, task was split into subtasks, skip it
                 } else {
-                    // Task already assessed as simple, dispatch it
                     tasks_to_dispatch.push(task);
                 }
             }
 
+            // Separate primary tasks and subtasks
             let primary_pending: Vec<_> =
                 tasks_to_dispatch.iter().filter(|t| t.depth == 0).collect();
             let subtask_pending: Vec<_> =
@@ -1663,58 +1533,67 @@ OR if splitting needed:
 
             // Dispatch primary tasks
             for task in primary_pending {
-                if primary_running >= primary_slots {
-                    break;
-                }
-
                 let task_id = task.id.clone();
-                dispatched_ids.insert(task_id.clone());
-                primary_running += 1;
-
-                info!(task_id = %task.id, "[primary] Dispatched");
+                let depth = task.depth as usize;
 
                 let store = self.store.clone();
                 let executor = self.executor.clone();
-                let task = task.clone();
+                let task_clone = task.clone();
                 let event_sender = self.config.event_sender.clone();
                 let workspace = self.config.workspace.clone();
 
-                join_set.spawn(async move {
-                    let result =
-                        run_task_pipeline(store, executor, task.clone(), event_sender, workspace)
-                            .await;
-                    (task_id, 0usize, result.ok().flatten())
+                let dispatched = scheduler.dispatch(task_id.clone(), depth, move || {
+                    let task_id = task_id.clone();
+                    async move {
+                        let result = run_task_pipeline(
+                            store,
+                            executor,
+                            task_clone,
+                            event_sender,
+                            workspace,
+                        )
+                        .await;
+                        (task_id, depth, result.ok().flatten())
+                    }
                 });
+
+                if dispatched {
+                    info!(task_id = %task.id, "[primary] Dispatched");
+                }
             }
 
             // Dispatch subtasks
             for task in subtask_pending {
-                if subtask_running >= subtask_slots {
-                    break;
-                }
-
                 let task_id = task.id.clone();
-                dispatched_ids.insert(task_id.clone());
-                subtask_running += 1;
-
-                info!(task_id = %task.id, "[subtask] Dispatched");
+                let depth = task.depth as usize;
 
                 let store = self.store.clone();
                 let executor = self.executor.clone();
-                let task = task.clone();
+                let task_clone = task.clone();
                 let event_sender = self.config.event_sender.clone();
                 let workspace = self.config.workspace.clone();
 
-                join_set.spawn(async move {
-                    let result =
-                        run_task_pipeline(store, executor, task.clone(), event_sender, workspace)
-                            .await;
-                    (task_id, 1usize, result.ok().flatten())
+                let dispatched = scheduler.dispatch(task_id.clone(), depth, move || {
+                    let task_id = task_id.clone();
+                    async move {
+                        let result = run_task_pipeline(
+                            store,
+                            executor,
+                            task_clone,
+                            event_sender,
+                            workspace,
+                        )
+                        .await;
+                        (task_id, depth, result.ok().flatten())
+                    }
                 });
+
+                if dispatched {
+                    info!(task_id = %task.id, "[subtask] Dispatched");
+                }
             }
 
             // Check exit conditions
-            // Fix: Need to also check InProgress tasks that may be stalled or failed
             let in_progress_count = self.store.count(TaskStatus::InProgress).await.unwrap_or(0);
             let failed_count = self.store.count(TaskStatus::Failed).await.unwrap_or(0);
             let completed_count = self.store.count(TaskStatus::Completed).await.unwrap_or(0);
@@ -1725,45 +1604,34 @@ OR if splitting needed:
             let all_terminal = completed_count + failed_count + skipped_count >= total_tasks;
 
             // No tasks running and no pending tasks - check if we should exit
-            if dispatched_ids.is_empty() && self.store.pending_tasks().await?.is_empty() {
+            if scheduler.is_empty() && self.store.pending_tasks().await?.is_empty() {
                 if all_terminal {
                     info!("All tasks reached terminal state");
                     break;
                 }
 
-                // Check if remaining InProgress tasks are stalled (started but not making progress)
-                if in_progress_count > 0 {
-                    // Check for stalled tasks and reset them to Pending
-                    let stalled_count = self.reset_stalled_tasks().await?;
-                    if stalled_count > 0 {
-                        info!(count = stalled_count, "Reset stalled tasks to Pending");
-                        continue; // Continue loop to reschedule reset tasks
+                // Check if remaining InProgress tasks are stalled
+                // (HealthMonitor already handles this above)
+                if in_progress_count == 0 {
+                    // If we have failed tasks but nothing running or pending, exit
+                    if failed_count > 0 {
+                        let blocked_count = total_tasks
+                            - completed_count
+                            - failed_count
+                            - skipped_count
+                            - in_progress_count;
+                        warn!(
+                            completed = completed_count,
+                            failed = failed_count,
+                            blocked = blocked_count,
+                            "Some tasks failed, others may be blocked"
+                        );
                     }
-                }
-
-                // If we have failed tasks but no pending and nothing running,
-                // check if all non-failed tasks are completed/blocked
-                if failed_count > 0 {
-                    let blocked_count = total_tasks
-                        - completed_count
-                        - failed_count
-                        - skipped_count
-                        - in_progress_count;
-                    warn!(
-                        completed = completed_count,
-                        failed = failed_count,
-                        blocked = blocked_count,
-                        "Some tasks failed, others may be blocked"
-                    );
-                    // Exit if nothing more can be done
-                    if in_progress_count == 0 && self.store.pending_tasks().await?.is_empty() {
-                        break;
-                    }
+                    break;
                 }
             }
 
-            // Sleep longer - task completion triggers immediate re-scheduling
-            // Only wake up periodically for stalled detection and TUI events
+            // Sleep before next iteration
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
@@ -1832,48 +1700,6 @@ OR if splitting needed:
         }
     }
 
-    /// Reset stalled InProgress tasks back to Pending
-    /// This handles cases where a task was marked InProgress but the pipeline failed
-    /// to update it (e.g., due to crash or communication error)
-    async fn reset_stalled_tasks(&self) -> Result<usize> {
-        use crate::models::TaskStatus;
-        use chrono::Utc;
-
-        let all_tasks = self.store.all_tasks().await?;
-        let mut reset_count = 0;
-        let now = Utc::now();
-        let stall_threshold_minutes = 10; // Consider tasks stalled after 10 minutes of no activity
-
-        for mut task in all_tasks {
-            if task.status != TaskStatus::InProgress {
-                continue;
-            }
-
-            // Check if task has had no activity for too long
-            // Use last_activity_at if available, otherwise fall back to started_at
-            let is_stalled = if let Some(activity_time) = task.last_activity_at.or(task.started_at) {
-                let elapsed = now.signed_duration_since(activity_time);
-                elapsed.num_minutes() > stall_threshold_minutes
-            } else {
-                // Task is InProgress but has no activity time - definitely stalled
-                true
-            };
-
-            if is_stalled {
-                warn!(task_id = %task.id, "Resetting stalled task to Pending");
-                task.status = TaskStatus::Pending;
-                task.started_at = None;
-                task.last_activity_at = None;
-                if let Err(e) = self.store.save_task(&task).await {
-                    error!(task_id = %task.id, error = %e, "Failed to reset stalled task");
-                } else {
-                    reset_count += 1;
-                }
-            }
-        }
-
-        Ok(reset_count)
-    }
 
     async fn print_summary(&self) -> Result<()> {
         // Save final topology
