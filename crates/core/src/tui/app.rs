@@ -178,6 +178,7 @@ pub enum Tab {
     Logs,
     Tasks,
     Output,
+    Events, // Only visible in verbose mode - shows all events
     Questions,
 }
 
@@ -186,7 +187,8 @@ impl Tab {
         match self {
             Self::Logs => Self::Tasks,
             Self::Tasks => Self::Output,
-            Self::Output => Self::Questions,
+            Self::Output => Self::Events,
+            Self::Events => Self::Questions,
             Self::Questions => Self::Logs,
         }
     }
@@ -196,16 +198,24 @@ impl Tab {
             Self::Logs => Self::Questions,
             Self::Tasks => Self::Logs,
             Self::Output => Self::Tasks,
-            Self::Questions => Self::Output,
+            Self::Events => Self::Output,
+            Self::Questions => Self::Events,
         }
     }
 
     /// Get next visible tab based on verbosity
     pub fn next_visible(self, verbosity: VerbosityLevel) -> Self {
         let next_tab = self.next();
-        // Skip Output tab in non-verbose mode
-        if next_tab == Tab::Output && verbosity < VerbosityLevel::Verbose {
-            next_tab.next() // Skip to Questions
+        // Skip Output and Events tabs in non-verbose mode
+        if (next_tab == Tab::Output || next_tab == Tab::Events)
+            && verbosity < VerbosityLevel::Verbose
+        {
+            // Skip to Questions (or further if we're past Questions)
+            if next_tab == Tab::Output {
+                Self::Questions // Skip Output and Events
+            } else {
+                next_tab.next() // Skip Events
+            }
         } else {
             next_tab
         }
@@ -214,9 +224,12 @@ impl Tab {
     /// Get previous visible tab based on verbosity
     pub fn prev_visible(self, verbosity: VerbosityLevel) -> Self {
         let prev_tab = self.prev();
-        // Skip Output tab in non-verbose mode
-        if prev_tab == Tab::Output && verbosity < VerbosityLevel::Verbose {
-            prev_tab.prev() // Skip to Tasks
+        // Skip Output and Events tabs in non-verbose mode
+        if (prev_tab == Tab::Output || prev_tab == Tab::Events)
+            && verbosity < VerbosityLevel::Verbose
+        {
+            // Skip to Tasks
+            Self::Tasks
         } else {
             prev_tab
         }
@@ -398,6 +411,12 @@ pub struct TuiApp {
     pub logs_auto_follow: bool,    // Auto-scroll to bottom on new logs
     pub logs_viewport_height: u16, // Viewport height for logs panel
 
+    // Events (verbose mode only)
+    pub events_buffer: Vec<String>, // Raw event log for debugging
+    pub events_scroll: usize,
+    pub events_auto_follow: bool,
+    pub max_events_lines: usize,
+
     // Questions tab
     pub questions: Vec<Question>,
     pub questions_panel: QuestionsPanel,
@@ -468,6 +487,10 @@ impl TuiApp {
             logs_scroll: 0,
             logs_auto_follow: true,
             logs_viewport_height: 0,
+            events_buffer: Vec::new(),
+            events_scroll: 0,
+            events_auto_follow: true,
+            max_events_lines: 1000,
             questions: Vec::new(),
             questions_panel: QuestionsPanel::new(),
             questions_scroll: 0,
@@ -903,6 +926,19 @@ impl TuiApp {
                     }
                 }
             }
+            Tab::Events => {
+                if delta > 0 {
+                    self.events_scroll = self.events_scroll.saturating_sub(delta as usize);
+                    self.events_auto_follow = false;
+                } else {
+                    let delta_abs = (-delta) as usize;
+                    let max_scroll = self.events_buffer.len().saturating_sub(1);
+                    self.events_scroll = (self.events_scroll + delta_abs).min(max_scroll);
+                    if self.events_scroll >= max_scroll.saturating_sub(5) {
+                        self.events_auto_follow = true;
+                    }
+                }
+            }
             Tab::Questions => {
                 if delta > 0 {
                     self.questions_scroll = self.questions_scroll.saturating_sub(delta as usize);
@@ -1149,6 +1185,10 @@ impl TuiApp {
                 self.output_scroll = 0;
                 self.output_auto_follow = true;
             }
+            Tab::Events => {
+                self.events_scroll = 0;
+                self.events_auto_follow = true;
+            }
             Tab::Logs => {
                 self.logs_scroll = 0;
                 self.logs_auto_follow = true;
@@ -1170,6 +1210,10 @@ impl TuiApp {
             Tab::Output => {
                 self.output_scroll = self.output_scroll.saturating_sub(1);
                 self.output_auto_follow = false;
+            }
+            Tab::Events => {
+                self.events_scroll = self.events_scroll.saturating_sub(1);
+                self.events_auto_follow = false;
             }
             Tab::Logs => {
                 self.logs_scroll = self.logs_scroll.saturating_sub(1);
@@ -1201,6 +1245,15 @@ impl TuiApp {
                     self.output_auto_follow = true;
                 }
             }
+            Tab::Events => {
+                let max_scroll = self.events_buffer.len().saturating_sub(1);
+                if self.events_scroll < max_scroll {
+                    self.events_scroll = self.events_scroll.saturating_add(1);
+                }
+                if self.events_scroll >= max_scroll.saturating_sub(5) {
+                    self.events_auto_follow = true;
+                }
+            }
             Tab::Logs => {
                 let entries = self.log_buffer.get_entries();
                 let max_scroll = entries
@@ -1226,13 +1279,28 @@ impl TuiApp {
 
     /// Process an orchestrator event
     pub fn process_event(&mut self, event: Event) {
-        // Only advance spinner on important events (not logs)
-        // This creates a breathing light effect that responds to activity
+        // Log all events to events_buffer (for verbose mode Events tab)
+        let event_str = format!("{:?}", event);
+        self.events_buffer.push(event_str);
+        if self.events_buffer.len() > self.max_events_lines {
+            self.events_buffer.remove(0);
+        }
+        if self.events_auto_follow {
+            self.events_scroll = self.events_buffer.len().saturating_sub(1);
+        }
+
+        // Only advance spinner on truly important events
+        // TaskProgress events are too frequent, only pulse on state changes
         match &event {
-            Event::Log { .. } => {} // Don't update spinner on logs
-            _ => {
+            Event::TaskStatusChanged { .. }
+            | Event::ExecutionStateChanged { .. }
+            | Event::TaskCreated { .. }
+            | Event::TaskSummary { .. }
+            | Event::ClaudeResult { .. }
+            | Event::ProgressReview { .. } => {
                 self.spinner_frame = self.spinner_frame.wrapping_add(1);
             }
+            _ => {} // Don't update spinner for other events
         }
 
         match event {

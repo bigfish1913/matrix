@@ -12,10 +12,10 @@ pub struct TabSwitcher;
 
 impl TabSwitcher {
     /// Render tab switcher
-    /// In normal mode, hide "Claude Output" tab (only show in verbose mode)
+    /// In normal mode, hide "Claude Output" and "Events" tabs (only show in verbose mode)
     pub fn render(current_tab: Tab, verbosity: VerbosityLevel) -> Tabs<'static> {
         let titles = if verbosity >= VerbosityLevel::Verbose {
-            vec!["Logs", "Tasks", "Claude Output", "Questions"]
+            vec!["Logs", "Tasks", "Output", "Events", "Questions"]
         } else {
             vec!["Logs", "Tasks", "Questions"]
         };
@@ -39,15 +39,21 @@ impl TabSwitcher {
                 if verbosity >= VerbosityLevel::Verbose {
                     2
                 } else {
-                    // Output tab not visible, stay on Tasks or handle gracefully
-                    1
+                    1 // Output tab not visible, stay on Tasks
+                }
+            }
+            Tab::Events => {
+                if verbosity >= VerbosityLevel::Verbose {
+                    3
+                } else {
+                    1 // Events tab not visible, stay on Tasks
                 }
             }
             Tab::Questions => {
                 if verbosity >= VerbosityLevel::Verbose {
-                    3
+                    4
                 } else {
-                    2 // Questions is at index 2 when Output is hidden
+                    2 // Questions is at index 2 when Output/Events are hidden
                 }
             }
         };

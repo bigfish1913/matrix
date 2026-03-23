@@ -70,6 +70,25 @@ pub fn render_app(frame: &mut Frame, app: &mut TuiApp) {
             let paragraph = OutputPanel::render(&app.output_lines, app.verbosity, scroll);
             frame.render_widget(paragraph, chunks[1]);
         }
+        Tab::Events => {
+            // Render raw events (verbose mode only)
+            let events_text = app.events_buffer.join("\n");
+            let scroll = if app.events_auto_follow {
+                usize::MAX
+            } else {
+                app.events_scroll
+            };
+            let paragraph = Paragraph::new(events_text)
+                .style(Style::default().fg(Color::Gray))
+                .scroll((scroll as u16, 0))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Events (Debug) ")
+                        .title_style(Style::default().fg(Color::Yellow)),
+                );
+            frame.render_widget(paragraph, chunks[1]);
+        }
         Tab::Questions => {
             // Render the questions panel
             app.questions_panel.render(frame, chunks[1], &app.questions);
