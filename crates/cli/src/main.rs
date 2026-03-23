@@ -13,7 +13,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[derive(Parser, Debug)]
 #[command(name = "matrix")]
 #[command(author, version, about = "Long-Running Agent Orchestrator using Claude CLI", long_about = None)]
-#[command(next_display_order = None)]  // Keep argument order stable
+#[command(next_display_order = None)] // Keep argument order stable
 struct Args {
     /// Project goal description
     #[arg(required = true)]
@@ -100,7 +100,8 @@ async fn main() -> anyhow::Result<()> {
 /// Run with TUI mode
 async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     use matrix_core::tui::{
-        create_event_channel, init_terminal, restore_terminal, LogBuffer, TerminalGuard, TuiLogLayer,
+        create_event_channel, init_terminal, restore_terminal, LogBuffer, TerminalGuard,
+        TuiLogLayer,
     };
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -118,7 +119,9 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
     let (response_sender, response_receiver) = create_event_channel();
 
     // Setup log file: use provided path or default to .matrix/matrix.log
-    let log_file_path = args.log_file.clone()
+    let log_file_path = args
+        .log_file
+        .clone()
         .unwrap_or_else(|| workspace.join(".matrix").join("matrix.log"));
 
     // Ensure parent directory exists
@@ -134,14 +137,15 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
 
     // Initialize tracing with both TuiLogLayer and file layer
     // Use INFO level by default, or respect MATRIX_LOG env var
-    let log_filter = std::env::var("MATRIX_LOG")
-        .unwrap_or_else(|_| "matrix=info".to_string());
+    let log_filter = std::env::var("MATRIX_LOG").unwrap_or_else(|_| "matrix=info".to_string());
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::new(log_filter),
-        )
+        .with(tracing_subscriber::EnvFilter::new(log_filter))
         .with(TuiLogLayer::new(event_sender.clone()))
-        .with(tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(log_file)).with_ansi(false))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(log_file))
+                .with_ansi(false),
+        )
         .init();
 
     // Log that logging has started
@@ -193,8 +197,13 @@ async fn run_with_tui(args: &Args) -> anyhow::Result<()> {
 
     // Spawn orchestrator as background task
     let orchestrator_handle = tokio::spawn(async move {
-        let mut orchestrator = Orchestrator::new(config).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        orchestrator.run().await.map_err(|e| anyhow::anyhow!("{}", e))
+        let mut orchestrator = Orchestrator::new(config)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        orchestrator
+            .run()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
     });
 
     // Extract terminal from guard for the event loop
@@ -326,7 +335,9 @@ async fn run_simple(args: &Args) -> anyhow::Result<()> {
     let tasks_dir = workspace.join(".matrix").join("tasks");
 
     // Setup log file: use provided path or default to .matrix/matrix.log
-    let log_file_path = args.log_file.clone()
+    let log_file_path = args
+        .log_file
+        .clone()
         .unwrap_or_else(|| workspace.join(".matrix").join("matrix.log"));
 
     // Ensure parent directory exists
@@ -341,14 +352,15 @@ async fn run_simple(args: &Args) -> anyhow::Result<()> {
         .open(&log_file_path)?;
 
     // Initialize tracing with both console and file output
-    let log_filter = std::env::var("MATRIX_LOG")
-        .unwrap_or_else(|_| "matrix=info".to_string());
+    let log_filter = std::env::var("MATRIX_LOG").unwrap_or_else(|_| "matrix=info".to_string());
     tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(log_filter))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr)) // Console output
         .with(
-            tracing_subscriber::EnvFilter::new(log_filter),
-        )
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))  // Console output
-        .with(tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(log_file)).with_ansi(false))  // File output
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(log_file))
+                .with_ansi(false),
+        ) // File output
         .init();
 
     info!(log_file = %log_file_path.display(), "Logging initialized");
@@ -409,10 +421,7 @@ fn resolve_workspace(args: &Args) -> anyhow::Result<PathBuf> {
 /// Generate URL-friendly slug
 fn slugify(s: &str) -> String {
     // Try to create a slug from ASCII alphanumeric characters
-    let ascii_slug: String = s
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect();
+    let ascii_slug: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
 
     if !ascii_slug.is_empty() {
         // Use ASCII characters if available

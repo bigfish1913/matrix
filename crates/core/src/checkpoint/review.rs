@@ -28,10 +28,21 @@ pub struct UpcomingTask {
 /// Detected issue
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Issue {
-    CircularDependency { cycle: Vec<String> },
-    MissingDependency { task_id: String, missing: String },
-    Blocked { task_id: String, blocked_by: Vec<String> },
-    Stalled { task_id: String, duration_secs: u64 },
+    CircularDependency {
+        cycle: Vec<String>,
+    },
+    MissingDependency {
+        task_id: String,
+        missing: String,
+    },
+    Blocked {
+        task_id: String,
+        blocked_by: Vec<String>,
+    },
+    Stalled {
+        task_id: String,
+        duration_secs: u64,
+    },
 }
 
 /// Progress review report
@@ -58,8 +69,7 @@ impl ReviewReport {
         let p = &self.progress;
         output.push_str(&format!(
             "📈 统计: {}/{} 已完成 ({:.0}%) | {} 待处理 | {} 执行中 | {} 失败\n",
-            p.completed, p.total, p.completion_percent,
-            p.pending, p.in_progress, p.failed
+            p.completed, p.total, p.completion_percent, p.pending, p.in_progress, p.failed
         ));
 
         // Time
@@ -93,10 +103,20 @@ impl ReviewReport {
                     Issue::MissingDependency { task_id, missing } => {
                         output.push_str(&format!("  • [{}] 缺少依赖: {}\n", task_id, missing));
                     }
-                    Issue::Blocked { task_id, blocked_by } => {
-                        output.push_str(&format!("  • [{}] 被阻塞: {}\n", task_id, blocked_by.join(", ")));
+                    Issue::Blocked {
+                        task_id,
+                        blocked_by,
+                    } => {
+                        output.push_str(&format!(
+                            "  • [{}] 被阻塞: {}\n",
+                            task_id,
+                            blocked_by.join(", ")
+                        ));
                     }
-                    Issue::Stalled { task_id, duration_secs } => {
+                    Issue::Stalled {
+                        task_id,
+                        duration_secs,
+                    } => {
                         output.push_str(&format!("  • [{}] 超时 {}秒\n", task_id, duration_secs));
                     }
                 }

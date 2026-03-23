@@ -325,7 +325,7 @@ impl OutputLine {
             }
             OutputLine::Result { content, .. } => {
                 let mut count = 1; // Header line
-                // Approximate markdown rendering
+                                   // Approximate markdown rendering
                 let lines = content.lines().count();
                 let max_lines = if verbosity >= VerbosityLevel::Verbose {
                     50

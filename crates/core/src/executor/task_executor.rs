@@ -7,7 +7,7 @@ use crate::detector::TestRunnerDetector;
 use crate::error::{Error, Result};
 use crate::models::{Question, Task, TaskStatus};
 use crate::store::{QuestionStore, TaskStore};
-use crate::tui::{Event, EventSender, ExecutionState, Activity, QuestionSender};
+use crate::tui::{Activity, Event, EventSender, ExecutionState, QuestionSender};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -235,7 +235,11 @@ impl TaskExecutor {
             // Truncate prompt for display (handle UTF-8 properly)
             let prompt_preview = if prompt.len() > 500 {
                 let truncated: String = prompt.chars().take(500).collect();
-                format!("{}...\n[truncated, total {} chars]", truncated, prompt.len())
+                format!(
+                    "{}...\n[truncated, total {} chars]",
+                    truncated,
+                    prompt.len()
+                )
             } else {
                 prompt.clone()
             };
@@ -413,7 +417,14 @@ Respond with a brief summary of what you fixed."#,
 
         let result = self
             .runner
-            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .call(
+                &prompt,
+                &self.workspace,
+                Some(TIMEOUT_EXEC),
+                None,
+                None,
+                Some(&task.id),
+            )
             .await?;
 
         if result.is_error {
@@ -445,7 +456,9 @@ Respond with a brief summary of what you fixed."#,
         });
 
         // Step 1: Run typecheck if available
-        let typecheck_result = self.run_command(&["npm", "run", "typecheck"], "typecheck").await;
+        let typecheck_result = self
+            .run_command(&["npm", "run", "typecheck"], "typecheck")
+            .await;
         let mut errors = Vec::new();
 
         match typecheck_result {
@@ -568,7 +581,14 @@ Respond with a brief summary of what you fixed."#,
 
         let result = self
             .runner
-            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .call(
+                &prompt,
+                &self.workspace,
+                Some(TIMEOUT_EXEC),
+                None,
+                None,
+                Some(&task.id),
+            )
             .await?;
 
         if result.is_error {
@@ -648,12 +668,14 @@ Respond with a brief summary of what you fixed."#,
             .spawn()
             .map_err(|e| Error::TaskExecution(format!("Failed to start dev server: {}", e)))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            Error::TaskExecution("Failed to capture stdout".to_string())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            Error::TaskExecution("Failed to capture stderr".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::TaskExecution("Failed to capture stdout".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| Error::TaskExecution("Failed to capture stderr".to_string()))?;
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
@@ -673,15 +695,21 @@ Respond with a brief summary of what you fixed."#,
                     output_lines.push(format!("[OUT] {}", line));
 
                     // Check for successful server start indicators
-                    if line.contains("localhost") || line.contains("ready in") ||
-                       line.contains("VITE") || line.contains("server running") ||
-                       line.contains("Local:") || line.contains("Network:") {
+                    if line.contains("localhost")
+                        || line.contains("ready in")
+                        || line.contains("VITE")
+                        || line.contains("server running")
+                        || line.contains("Local:")
+                        || line.contains("Network:")
+                    {
                         server_started = true;
                     }
 
                     // Check for error indicators
-                    if line.to_lowercase().contains("error") ||
-                       line.contains("failed") || line.contains("cannot") {
+                    if line.to_lowercase().contains("error")
+                        || line.contains("failed")
+                        || line.contains("cannot")
+                    {
                         has_error = true;
                     }
                 }
@@ -756,7 +784,14 @@ Respond with a brief summary of what you fixed."#,
 
         let result = self
             .runner
-            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .call(
+                &prompt,
+                &self.workspace,
+                Some(TIMEOUT_EXEC),
+                None,
+                None,
+                Some(&task.id),
+            )
             .await?;
 
         if result.is_error {
@@ -838,13 +873,24 @@ APPROVE / NEEDS_FIX
 
 If NEEDS_FIX, explain what needs to be fixed.
 "#,
-            task.title, task.description, doc_section, self.workspace.display(), workspace_files
+            task.title,
+            task.description,
+            doc_section,
+            self.workspace.display(),
+            workspace_files
         );
 
         // Call Claude to perform the review
         let result = self
             .runner
-            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .call(
+                &prompt,
+                &self.workspace,
+                Some(TIMEOUT_EXEC),
+                None,
+                None,
+                Some(&task.id),
+            )
             .await?;
 
         // Emit token usage update if available
@@ -859,9 +905,10 @@ If NEEDS_FIX, explain what needs to be fixed.
         let review_result = result.text.clone();
 
         // Check if review passed
-        let passed = !result.is_error &&
-            (review_result.to_lowercase().contains("approve") ||
-             review_result.to_lowercase().contains("passed checks") && !review_result.to_lowercase().contains("failed checks"));
+        let passed = !result.is_error
+            && (review_result.to_lowercase().contains("approve")
+                || review_result.to_lowercase().contains("passed checks")
+                    && !review_result.to_lowercase().contains("failed checks"));
 
         if passed {
             info!(task_id = %task.id, "AI functionality review passed");
@@ -881,7 +928,11 @@ If NEEDS_FIX, explain what needs to be fixed.
     }
 
     /// Fix issues found during AI functionality review
-    pub async fn fix_functionality_issues(&self, task: &mut Task, review_output: &str) -> Result<bool> {
+    pub async fn fix_functionality_issues(
+        &self,
+        task: &mut Task,
+        review_output: &str,
+    ) -> Result<bool> {
         info!(task_id = %task.id, title = %task.title, "Fixing functionality issues");
         self.emit_event(Event::TaskProgress {
             id: task.id.clone(),
@@ -910,7 +961,14 @@ Respond with a brief summary of what you fixed."#,
 
         let result = self
             .runner
-            .call(&prompt, &self.workspace, Some(TIMEOUT_EXEC), None, None, Some(&task.id))
+            .call(
+                &prompt,
+                &self.workspace,
+                Some(TIMEOUT_EXEC),
+                None,
+                None,
+                Some(&task.id),
+            )
             .await?;
 
         if result.is_error {
@@ -1086,11 +1144,7 @@ Implement the task now. Work directly in the workspace directory."#,
     ) -> Vec<String> {
         after
             .iter()
-            .filter(|(path, mtime)| {
-                before
-                    .get(*path)
-                    .is_none_or(|old_mtime| old_mtime < *mtime)
-            })
+            .filter(|(path, mtime)| before.get(*path).is_none_or(|old_mtime| old_mtime < *mtime))
             .map(|(path, _)| path.clone())
             .collect()
     }
@@ -1122,7 +1176,9 @@ Implement the task now. Work directly in the workspace directory."#,
     ) -> Result<String> {
         // Validate options
         if options.is_empty() {
-            return Err(Error::TaskExecution("No options provided for question".to_string()));
+            return Err(Error::TaskExecution(
+                "No options provided for question".to_string(),
+            ));
         }
 
         let question_model = Question::new(
@@ -1173,12 +1229,13 @@ Implement the task now. Work directly in the workspace directory."#,
                 .cloned()
                 .unwrap_or_else(|| options.first().cloned().unwrap_or_default());
 
-            let reason = recommendation_reason
-                .unwrap_or("Auto-decided (non-blocking)");
+            let reason = recommendation_reason.unwrap_or("Auto-decided (non-blocking)");
 
             // Record auto-decision
             if let Some(ref store) = self.question_store {
-                store.record_auto_decision(&question_model.id, &decision, reason).await?;
+                store
+                    .record_auto_decision(&question_model.id, &decision, reason)
+                    .await?;
             }
 
             // Send event for UI update
@@ -1225,7 +1282,8 @@ Implement the task now. Work directly in the workspace directory."#,
     fn extract_question_data(json: &serde_json::Value) -> Option<QuestionData> {
         let question = json.get("question")?.as_str()?.to_string();
 
-        let options = json.get("options")?
+        let options = json
+            .get("options")?
             .as_array()?
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -1235,25 +1293,38 @@ Implement the task now. Work directly in the workspace directory."#,
             return None;
         }
 
-        let pros = json.get("pros")
+        let pros = json
+            .get("pros")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let cons = json.get("cons")
+        let cons = json
+            .get("cons")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let recommended = json.get("recommended")
+        let recommended = json
+            .get("recommended")
             .and_then(|v| v.as_u64())
             .map(|n| n as usize);
 
-        let recommendation_reason = json.get("recommendation_reason")
+        let recommendation_reason = json
+            .get("recommendation_reason")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let blocking = json.get("blocking")
+        let blocking = json
+            .get("blocking")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
@@ -1280,7 +1351,8 @@ Implement the task now. Work directly in the workspace directory."#,
                 question_data.recommended,
                 question_data.recommendation_reason.as_deref(),
                 question_data.blocking,
-            ).await?;
+            )
+            .await?;
         }
         Ok(())
     }

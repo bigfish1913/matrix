@@ -51,7 +51,9 @@ impl StatusBar {
         };
 
         // Check if we have any activity
-        let has_activity = state != ExecutionState::Idle && state != ExecutionState::Completed && state != ExecutionState::Failed;
+        let has_activity = state != ExecutionState::Idle
+            && state != ExecutionState::Completed
+            && state != ExecutionState::Failed;
 
         // Pulse indicator - cycles through intensity levels
         let pulse = if has_activity {
@@ -70,7 +72,9 @@ impl StatusBar {
         // Spinner animation
         let spinner = if matches!(
             state,
-            ExecutionState::Generating | ExecutionState::Clarifying | ExecutionState::Running { .. }
+            ExecutionState::Generating
+                | ExecutionState::Clarifying
+                | ExecutionState::Running { .. }
         ) {
             let frame = spinner_frame % SPINNER_FRAMES.len();
             SPINNER_FRAMES[frame]
@@ -153,14 +157,12 @@ impl StatusBar {
             Span::styled("tk:", Style::default().fg(Color::Magenta)),
             Span::styled(
                 format!("{}k", current_task_tokens / 1000),
-                Style::default()
-                    .fg(Color::Yellow),
+                Style::default().fg(Color::Yellow),
             ),
             Span::styled("/", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{}k", total_tokens / 1000),
-                Style::default()
-                    .fg(Color::White),
+                Style::default().fg(Color::White),
             ),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(model.to_string(), Style::default().fg(Color::Magenta)),

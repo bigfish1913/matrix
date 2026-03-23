@@ -109,20 +109,11 @@ impl QuestionsPanel {
     }
 
     /// Render the questions panel
-    pub fn render(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        questions: &[Question],
-    ) {
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, questions: &[Question]) {
         if questions.is_empty() {
             let paragraph = Paragraph::new("No questions yet")
                 .style(Style::default().fg(Color::DarkGray))
-                .block(
-                    Block::default()
-                        .title(" Questions ")
-                        .borders(Borders::ALL),
-                );
+                .block(Block::default().title(" Questions ").borders(Borders::ALL));
             frame.render_widget(paragraph, area);
             return;
         }
@@ -146,12 +137,12 @@ impl QuestionsPanel {
 
         // Pending section header
         if !pending.is_empty() {
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(
-                    "━━━ Pending Questions ━━━",
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                ),
-            ])));
+            items.push(ListItem::new(Line::from(vec![Span::styled(
+                "━━━ Pending Questions ━━━",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )])));
             items.push(ListItem::new(Line::from("")));
 
             for q in &pending {
@@ -199,12 +190,10 @@ impl QuestionsPanel {
             if !pending.is_empty() {
                 items.push(ListItem::new(Line::from("")));
             }
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(
-                    "━━━ Answered ━━━",
-                    Style::default().fg(Color::Green),
-                ),
-            ])));
+            items.push(ListItem::new(Line::from(vec![Span::styled(
+                "━━━ Answered ━━━",
+                Style::default().fg(Color::Green),
+            )])));
             items.push(ListItem::new(Line::from("")));
 
             for q in &answered {
@@ -282,12 +271,7 @@ impl QuestionsPanel {
     }
 
     /// Render the answer dialog
-    pub fn render_answer_dialog(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        question: &Question,
-    ) {
+    pub fn render_answer_dialog(&mut self, frame: &mut Frame, area: Rect, question: &Question) {
         // Create centered popup
         let popup_area = centered_rect(85, 80, area);
 
@@ -311,7 +295,9 @@ impl QuestionsPanel {
         let q_text = format!("▶ {}", question.question);
         lines.push(Line::from(vec![Span::styled(
             q_text,
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )]));
         lines.push(Line::from(""));
 
@@ -330,7 +316,12 @@ impl QuestionsPanel {
             };
 
             let opt_text = if opt.chars().count() > width.saturating_sub(10) {
-                format!("{}...", opt.chars().take(width.saturating_sub(13)).collect::<String>())
+                format!(
+                    "{}...",
+                    opt.chars()
+                        .take(width.saturating_sub(13))
+                        .collect::<String>()
+                )
             } else {
                 opt.clone()
             };
@@ -372,7 +363,11 @@ impl QuestionsPanel {
         // "Other" option for custom input
         let other_idx = question.options.len();
         let is_other_selected = self.dialog_selection == other_idx;
-        let other_prefix = if is_other_selected { "  ◉ " } else { "  ○ " };
+        let other_prefix = if is_other_selected {
+            "  ◉ "
+        } else {
+            "  ○ "
+        };
         let other_style = if is_other_selected {
             Style::default().fg(Color::Yellow)
         } else {

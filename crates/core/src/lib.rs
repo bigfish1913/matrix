@@ -15,16 +15,19 @@ pub mod store;
 pub mod tui;
 
 pub use agent::{AgentPool, ClaudeResult, ClaudeRunner, SharedAgentPool};
-pub use checkpoint::{CheckpointManager, CheckpointResult, BypassStrategy, BlockedTask, ReviewReport, ProgressStats, UpcomingTask, Issue};
+pub use checkpoint::{
+    BlockedTask, BypassStrategy, CheckpointManager, CheckpointResult, Issue, ProgressStats,
+    ReviewReport, UpcomingTask,
+};
 pub use config::*;
 pub use detector::{ProjectDetector, ProjectInfo, ProjectType, TestRunner, TestRunnerDetector};
 pub use error::{Error, Result};
 pub use executor::{ExecutorConfig, TaskExecutor};
 pub use memory::{GlobalMemory, TaskMemoryExt};
-pub use models::{Complexity, Manifest, Task, TaskMemory, TaskStatus, CodeChange, ProblemSolution};
+pub use models::{CodeChange, Complexity, Manifest, ProblemSolution, Task, TaskMemory, TaskStatus};
 pub use orchestrator::{Orchestrator, OrchestratorConfig};
 pub use store::TaskStore;
 pub use tui::{
-    render_app, ClarificationSender, Event, EventSender, LogBuffer, MatrixTerminal, TuiApp, TuiEvent, TuiLogLayer,
-    VerbosityLevel,
+    render_app, ClarificationSender, Event, EventSender, LogBuffer, MatrixTerminal, TuiApp,
+    TuiEvent, TuiLogLayer, VerbosityLevel,
 };

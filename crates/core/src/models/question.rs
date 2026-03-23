@@ -11,10 +11,10 @@ static QUESTION_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[serde(rename_all = "snake_case")]
 pub enum QuestionStatus {
     #[default]
-    Pending,      // Waiting for answer
-    Answered,     // User answered
-    AutoDecided,  // Agent decided (non-blocking)
-    Expired,      // Cancelled/outdated
+    Pending, // Waiting for answer
+    Answered,    // User answered
+    AutoDecided, // Agent decided (non-blocking)
+    Expired,     // Cancelled/outdated
 }
 
 impl std::fmt::Display for QuestionStatus {

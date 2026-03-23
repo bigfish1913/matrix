@@ -1,7 +1,7 @@
 //! Task-level memory extraction.
 
-use crate::models::{Task, TaskMemory};
 use crate::memory::GlobalMemory;
+use crate::models::{Task, TaskMemory};
 use std::path::Path;
 
 /// Extension trait for TaskMemory operations
@@ -60,7 +60,9 @@ mod tests {
     #[test]
     fn test_for_dependency_context() {
         let mut memory = TaskMemory::default();
-        memory.key_info.insert("api".to_string(), "/api/v1".to_string());
+        memory
+            .key_info
+            .insert("api".to_string(), "/api/v1".to_string());
 
         let ctx = memory.for_dependency_context();
         assert!(ctx.contains("Key Info"));

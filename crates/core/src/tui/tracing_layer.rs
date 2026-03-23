@@ -92,15 +92,14 @@ impl<'a> tracing::field::Visit for ContextAwareVisitor<'a> {
             "title" | "task_title" => {
                 *self.task_title = Some(format!("{:?}", value).trim_matches('"').to_string())
             }
-            "phase" => {
-                *self.phase = Some(format!("{:?}", value).trim_matches('"').to_string())
-            }
+            "phase" => *self.phase = Some(format!("{:?}", value).trim_matches('"').to_string()),
             _ => {
                 // Include other fields in message
                 if !self.message.is_empty() {
                     self.message.push_str(", ");
                 }
-                self.message.push_str(&format!("{}={:?}", field.name(), value));
+                self.message
+                    .push_str(&format!("{}={:?}", field.name(), value));
             }
         }
     }
@@ -115,7 +114,8 @@ impl<'a> tracing::field::Visit for ContextAwareVisitor<'a> {
                 if !self.message.is_empty() {
                     self.message.push_str(", ");
                 }
-                self.message.push_str(&format!("{}={}", field.name(), value));
+                self.message
+                    .push_str(&format!("{}={}", field.name(), value));
             }
         }
     }

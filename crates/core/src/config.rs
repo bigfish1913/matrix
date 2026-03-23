@@ -33,7 +33,6 @@ impl fmt::Display for Model {
 /// 最大任务拆分深度
 pub const MAX_DEPTH: u32 = 2;
 
-
 /// 最大重试次数
 pub const MAX_RETRIES: u32 = 3;
 

@@ -92,8 +92,16 @@ fn test_log_buffer_pattern_dedup() {
     let ctx = LogContext::default();
 
     // Messages with different numbers but same pattern should be deduped
-    buffer.push(LogLevel::Info, "Progress: 1 completed".to_string(), ctx.clone());
-    buffer.push(LogLevel::Info, "Progress: 2 completed".to_string(), ctx.clone());
+    buffer.push(
+        LogLevel::Info,
+        "Progress: 1 completed".to_string(),
+        ctx.clone(),
+    );
+    buffer.push(
+        LogLevel::Info,
+        "Progress: 2 completed".to_string(),
+        ctx.clone(),
+    );
     buffer.push(LogLevel::Info, "Progress: 10 completed".to_string(), ctx);
 
     let entries = buffer.get_entries();

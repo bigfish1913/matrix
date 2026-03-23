@@ -27,10 +27,7 @@ pub enum BypassStrategy {
     },
     /// Mark as skipped, continue with subsequent tasks
     #[serde(rename = "mark_skipped")]
-    MarkSkipped {
-        task_id: String,
-        reason: String,
-    },
+    MarkSkipped { task_id: String, reason: String },
 }
 
 /// Replacement task definition

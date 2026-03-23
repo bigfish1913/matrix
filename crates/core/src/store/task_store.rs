@@ -111,8 +111,9 @@ impl TaskStore {
                 if pos > 0 {
                     let parent_id = &task.id[..pos];
                     // Check if the suffix after the last hyphen is a number
-                    if task.id[pos+1..].parse::<u32>().is_ok() {
-                        subtask_map.entry(parent_id.to_string())
+                    if task.id[pos + 1..].parse::<u32>().is_ok() {
+                        subtask_map
+                            .entry(parent_id.to_string())
                             .or_default()
                             .push(task.id.clone());
                     }

@@ -241,10 +241,7 @@ impl TasksPanel {
                         // Show count and first 2 IDs
                         format!(" ⬆{}[{}, ...]", dep_count, item.depends_on[..2].join(", "))
                     };
-                    spans.push(Span::styled(
-                        deps_str,
-                        Style::default().fg(Color::Magenta),
-                    ));
+                    spans.push(Span::styled(deps_str, Style::default().fg(Color::Magenta)));
                 }
 
                 ListItem::new(Line::from(spans))
@@ -305,10 +302,7 @@ impl TasksPanel {
                     } else {
                         format!(" ⬆{}[{}, ...]", dep_count, task.depends_on[..2].join(", "))
                     };
-                    spans.push(Span::styled(
-                        deps_str,
-                        Style::default().fg(Color::Magenta),
-                    ));
+                    spans.push(Span::styled(deps_str, Style::default().fg(Color::Magenta)));
                 }
 
                 ListItem::new(Line::from(spans))

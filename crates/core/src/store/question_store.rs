@@ -119,12 +119,7 @@ impl QuestionStore {
     }
 
     /// Record auto-decision for non-blocking question
-    pub async fn record_auto_decision(
-        &self,
-        id: &str,
-        decision: &str,
-        reason: &str,
-    ) -> Result<()> {
+    pub async fn record_auto_decision(&self, id: &str, decision: &str, reason: &str) -> Result<()> {
         let mut file = self.load_questions().await?;
 
         if let Some(question) = file.questions.iter_mut().find(|q| q.id == id) {

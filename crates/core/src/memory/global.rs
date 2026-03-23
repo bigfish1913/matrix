@@ -27,10 +27,7 @@ impl GlobalMemory {
 
     /// Append content to global memory
     pub async fn append(&mut self, section: &str, content: &str) -> Result<()> {
-        let new_content = format!(
-            "\n\n---\n## {}\n\n{}\n",
-            section, content
-        );
+        let new_content = format!("\n\n---\n## {}\n\n{}\n", section, content);
 
         // Ensure directory exists
         if let Some(parent) = self.path.parent() {

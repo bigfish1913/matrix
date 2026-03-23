@@ -58,7 +58,9 @@ pub enum ExecutionState {
     Idle,
     Clarifying,
     Generating,
-    Running { activity: Activity },
+    Running {
+        activity: Activity,
+    },
     Completed,
     Failed,
 }
@@ -401,7 +403,10 @@ mod tests {
     #[test]
     fn test_execution_state_display() {
         assert_eq!(
-            ExecutionState::Running { activity: Activity::ApiCall }.to_string(),
+            ExecutionState::Running {
+                activity: Activity::ApiCall
+            }
+            .to_string(),
             "Running:api"
         );
     }

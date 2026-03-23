@@ -44,12 +44,10 @@ impl LogsPanel {
                 if let Some(ref task_id) = entry.task_id {
                     // Task group header
                     let title = entry.task_title.as_deref().unwrap_or("");
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("━━━ {}: {} ━━━", task_id, title),
-                            Style::default().fg(Color::Cyan),
-                        ),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("━━━ {}: {} ━━━", task_id, title),
+                        Style::default().fg(Color::Cyan),
+                    )]));
                 } else if let Some(ref phase) = entry.phase {
                     // Phase group header
                     let phase_display = match phase.as_str() {
@@ -60,12 +58,10 @@ impl LogsPanel {
                         "summary" => "Summary",
                         _ => phase,
                     };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("━━━ {} ━━━", phase_display),
-                            Style::default().fg(Color::Magenta),
-                        ),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("━━━ {} ━━━", phase_display),
+                        Style::default().fg(Color::Magenta),
+                    )]));
                 }
 
                 current_task_id = entry.task_id.as_deref();

@@ -1,16 +1,16 @@
 //! Checkpoint manager for task orchestration.
 
+use crate::checkpoint::bypass::BypassStrategy;
+use crate::checkpoint::review::{Issue, ProgressStats, ReviewReport, UpcomingTask};
 use crate::config::CheckpointConfig;
 use crate::error::Result;
 use crate::models::{Task, TaskStatus};
 use crate::store::TaskStore;
-use crate::checkpoint::review::{Issue, ProgressStats, ReviewReport, UpcomingTask};
-use crate::checkpoint::bypass::BypassStrategy;
+use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
-use chrono::Utc;
 
 /// Blocked task
 #[derive(Debug, Clone)]
@@ -138,7 +138,9 @@ impl CheckpointManager {
             .filter(|t| t.depends_on.iter().any(|d| failed_ids.contains(d.as_str())))
             .map(|t| BlockedTask {
                 task_id: t.id.clone(),
-                blocked_by: t.depends_on.iter()
+                blocked_by: t
+                    .depends_on
+                    .iter()
                     .filter(|d| failed_ids.contains(d.as_str()))
                     .cloned()
                     .collect(),
@@ -181,11 +183,26 @@ impl CheckpointManager {
 
         // Statistics
         let total = tasks.len();
-        let completed = tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
-        let pending = tasks.iter().filter(|t| t.status == TaskStatus::Pending).count();
-        let in_progress = tasks.iter().filter(|t| t.status == TaskStatus::InProgress).count();
-        let failed = tasks.iter().filter(|t| t.status == TaskStatus::Failed).count();
-        let skipped = tasks.iter().filter(|t| t.status == TaskStatus::Skipped).count();
+        let completed = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Completed)
+            .count();
+        let pending = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Pending)
+            .count();
+        let in_progress = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::InProgress)
+            .count();
+        let failed = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Failed)
+            .count();
+        let skipped = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Skipped)
+            .count();
 
         let completion_percent = if total > 0 {
             (completed as f64 / total as f64) * 100.0

@@ -64,7 +64,7 @@ impl OutputPanel {
                         md_lines.push(Line::from(vec![
                             Span::styled(
                                 format!("{}[Thinking] ", task_prefix),
-                                Style::default().fg(Color::Magenta)
+                                Style::default().fg(Color::Magenta),
                             ),
                             Span::styled(content.clone(), Style::default().fg(Color::Gray)),
                         ]));
@@ -73,7 +73,7 @@ impl OutputPanel {
                         if let Some(first) = md_lines.first_mut() {
                             let mut new_spans = vec![Span::styled(
                                 format!("{}[Thinking] ", task_prefix),
-                                Style::default().fg(Color::Magenta)
+                                Style::default().fg(Color::Magenta),
                             )];
                             new_spans.extend(first.spans.clone());
                             *first = Line::from(new_spans);
@@ -86,7 +86,7 @@ impl OutputPanel {
                     vec![Line::from(vec![
                         Span::styled(
                             format!("{}[Thinking] ", task_prefix),
-                            Style::default().fg(Color::Magenta)
+                            Style::default().fg(Color::Magenta),
                         ),
                         Span::styled(
                             if content.len() > 80 {
@@ -108,7 +108,7 @@ impl OutputPanel {
                 let mut lines = vec![Line::from(vec![
                     Span::styled(
                         format!("{}", task_prefix),
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled("[", Style::default().fg(Color::DarkGray)),
                     Span::styled(tool_name.clone(), Style::default().fg(Color::Cyan)),
@@ -155,7 +155,7 @@ impl OutputPanel {
                 let mut lines = vec![Line::from(vec![
                     Span::styled(
                         format!("{}", task_prefix),
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled("[", Style::default().fg(Color::DarkGray)),
                     Span::styled(tool_name.clone(), Style::default().fg(Color::Cyan)),
@@ -180,7 +180,11 @@ impl OutputPanel {
 
                     if result.lines().count() > max_lines {
                         lines.push(Line::styled(
-                            format!("{}  ... (+{} more lines)", task_prefix, result.lines().count() - max_lines),
+                            format!(
+                                "{}  ... (+{} more lines)",
+                                task_prefix,
+                                result.lines().count() - max_lines
+                            ),
                             Style::default().fg(Color::Yellow),
                         ));
                     }
@@ -197,7 +201,7 @@ impl OutputPanel {
                 let mut lines = vec![Line::from(vec![
                     Span::styled(
                         format!("{}", task_prefix),
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled("── Result ──", Style::default().fg(Color::Yellow)),
                 ])];
@@ -212,16 +216,20 @@ impl OutputPanel {
                 for (_i, md_line) in md_lines.iter().take(max_lines).enumerate() {
                     let mut new_line = md_line.clone();
                     // Prefix with task_id (as spacing)
-                    new_line.spans.insert(0, Span::styled(
-                        task_prefix.clone(),
-                        Style::default().fg(Color::DarkGray)
-                    ));
+                    new_line.spans.insert(
+                        0,
+                        Span::styled(task_prefix.clone(), Style::default().fg(Color::DarkGray)),
+                    );
                     lines.push(new_line);
                 }
 
                 if md_lines.len() > max_lines {
                     lines.push(Line::styled(
-                        format!("{}... (+{} more lines)", task_prefix, md_lines.len() - max_lines),
+                        format!(
+                            "{}... (+{} more lines)",
+                            task_prefix,
+                            md_lines.len() - max_lines
+                        ),
                         Style::default().fg(Color::Yellow),
                     ));
                 }

@@ -7,8 +7,8 @@ use crate::config::{MAX_DEPTH, MAX_RETRIES, TIMEOUT_PLAN};
 use crate::error::{Error, Result};
 use crate::executor::{ExecutorConfig, TaskExecutor};
 use crate::memory::GlobalMemory;
-use crate::models::{Complexity, Task, TaskMemory, TaskStatus};
 use crate::memory::TaskMemoryExt;
+use crate::models::{Complexity, Task, TaskMemory, TaskStatus};
 use crate::store::{QuestionStore, TaskStore};
 use crate::tui::event::{AnswerSender, QuestionSender};
 use crate::tui::topology::{generate_topology_file, TaskTopologyInfo};
@@ -98,7 +98,9 @@ impl Orchestrator {
         let agent_pool = SharedAgentPool::new();
 
         // Initialize QuestionStore in .matrix directory
-        let questions_dir = config.tasks_dir.parent()
+        let questions_dir = config
+            .tasks_dir
+            .parent()
             .unwrap_or(&config.tasks_dir)
             .join(".matrix");
         let question_store = Arc::new(QuestionStore::new(questions_dir).await?);
@@ -115,13 +117,16 @@ impl Orchestrator {
             ..Default::default()
         };
 
-        let executor = Arc::new(TaskExecutor::new(
-            config.workspace.clone(),
-            store.clone(),
-            agent_pool.clone(),
-            executor_config,
-        ).with_event_sender(config.event_sender.clone())
-         .with_question_store(Arc::clone(&question_store)));
+        let executor = Arc::new(
+            TaskExecutor::new(
+                config.workspace.clone(),
+                store.clone(),
+                agent_pool.clone(),
+                executor_config,
+            )
+            .with_event_sender(config.event_sender.clone())
+            .with_question_store(Arc::clone(&question_store)),
+        );
 
         // Initialize checkpoint and memory systems
         let checkpoint_config = CheckpointConfig::default();
@@ -165,7 +170,11 @@ impl Orchestrator {
         // Process events (no mutable borrow issues here)
         for event in events {
             match event {
-                Event::AgentQuestion { task_id, question, response_tx } => {
+                Event::AgentQuestion {
+                    task_id,
+                    question,
+                    response_tx,
+                } => {
                     // Clone needed data before moving
                     let question_id = question.id.clone();
                     let task_id_for_log = question.task_id.clone();
@@ -176,7 +185,8 @@ impl Orchestrator {
                     }
 
                     // Store the response channel for later
-                    self.pending_question_responses.insert(question_id.clone(), response_tx);
+                    self.pending_question_responses
+                        .insert(question_id.clone(), response_tx);
 
                     // Emit event to TUI to display (TUI will answer via QuestionAnswered event)
                     if let Some(ref sender) = self.config.event_sender {
@@ -189,7 +199,10 @@ impl Orchestrator {
 
                     info!(question_id = %question_id, task_id = %task_id_for_log, "Question received from task");
                 }
-                Event::QuestionAnswered { question_id, answer } => {
+                Event::QuestionAnswered {
+                    question_id,
+                    answer,
+                } => {
                     // Update store
                     if let Err(e) = self.question_store.answer(&question_id, &answer).await {
                         warn!(question_id = %question_id, error = %e, "Failed to record answer");
@@ -204,13 +217,17 @@ impl Orchestrator {
                         }
                     }
                 }
-                Event::QuestionAutoDecided { question_id, decision, reason } => {
+                Event::QuestionAutoDecided {
+                    question_id,
+                    decision,
+                    reason,
+                } => {
                     // Update store
-                    if let Err(e) = self.question_store.record_auto_decision(
-                        &question_id,
-                        &decision,
-                        &reason,
-                    ).await {
+                    if let Err(e) = self
+                        .question_store
+                        .record_auto_decision(&question_id, &decision, &reason)
+                        .await
+                    {
                         warn!(question_id = %question_id, error = %e, "Failed to record auto-decision");
                     }
 
@@ -266,7 +283,10 @@ impl Orchestrator {
         // Load any pending questions from previous run (for info only)
         let pending = self.question_store.pending_questions().await?;
         if !pending.is_empty() {
-            info!("Found {} pending questions from previous run", pending.len());
+            info!(
+                "Found {} pending questions from previous run",
+                pending.len()
+            );
             for q in &pending {
                 info!(question_id = %q.id, task_id = %q.task_id, question = %q.question, "Pending question");
             }
@@ -314,7 +334,9 @@ impl Orchestrator {
 
         // Emit Running state after tasks are generated/resumed
         self.emit_event(Event::ExecutionStateChanged {
-            state: ExecutionState::Running { activity: crate::tui::Activity::Planning },
+            state: ExecutionState::Running {
+                activity: crate::tui::Activity::Planning,
+            },
         });
 
         // Emit model info
@@ -402,7 +424,10 @@ impl Orchestrator {
 
     /// Phase 0: Interactive clarification with multiple choice questions
     async fn clarify_goal(&self) -> Result<String> {
-        info!(phase = "clarification", "Phase 0: Starting clarification...");
+        info!(
+            phase = "clarification",
+            "Phase 0: Starting clarification..."
+        );
 
         let lang_instruction = match self.config.language.as_str() {
             "zh" => "请用中文提问，选项也用中文。优缺点和推荐理由也用中文。",
@@ -465,7 +490,14 @@ Example:
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None, Some("orchestrator"))
+            .call(
+                &prompt,
+                &self.config.workspace,
+                Some(TIMEOUT_PLAN),
+                None,
+                None,
+                Some("orchestrator"),
+            )
             .await?;
 
         if result.is_error {
@@ -479,11 +511,19 @@ Example:
                 task_id: "clarification".to_string(),
                 tokens_used: usage.total_tokens,
             });
-            info!(phase = "clarification", tokens = usage.total_tokens, "Token usage");
+            info!(
+                phase = "clarification",
+                tokens = usage.total_tokens,
+                "Token usage"
+            );
         }
 
         // Log raw response for debugging
-        info!(phase = "clarification", "Clarification response length: {} chars", result.text.len());
+        info!(
+            phase = "clarification",
+            "Clarification response length: {} chars",
+            result.text.len()
+        );
 
         // Try to extract JSON array from response (may be in markdown code block)
         let json_text = if let Some(json) = extract_json_from_markdown(&result.text) {
@@ -495,16 +535,20 @@ Example:
         };
 
         // Parse questions with options
-        let raw_questions: Vec<RawQuestion> = match serde_json::from_str::<Vec<RawQuestion>>(&json_text) {
-            Ok(q) => {
-                info!(phase = "clarification", "Parsed {} questions", q.len());
-                q
-            }
-            Err(e) => {
-                warn!(phase = "clarification", "Failed to parse questions JSON: {}", e);
-                return Ok(String::new());
-            }
-        };
+        let raw_questions: Vec<RawQuestion> =
+            match serde_json::from_str::<Vec<RawQuestion>>(&json_text) {
+                Ok(q) => {
+                    info!(phase = "clarification", "Parsed {} questions", q.len());
+                    q
+                }
+                Err(e) => {
+                    warn!(
+                        phase = "clarification",
+                        "Failed to parse questions JSON: {}", e
+                    );
+                    return Ok(String::new());
+                }
+            };
 
         // Convert to ClarificationQuestion
         let questions: Vec<ClarificationQuestion> = raw_questions
@@ -522,7 +566,11 @@ Example:
         // Check if in TUI mode
         if let Some(ref sender) = self.config.event_sender {
             // TUI mode: send questions via event channel and wait for answers
-            info!(phase = "clarification", "Sending {} questions to TUI...", questions.len());
+            info!(
+                phase = "clarification",
+                "Sending {} questions to TUI...",
+                questions.len()
+            );
             let (tx, rx) = tokio::sync::oneshot::channel::<Vec<String>>();
             match sender.send(Event::ClarificationQuestions {
                 questions: questions.clone(),
@@ -539,7 +587,11 @@ Example:
             info!(phase = "clarification", "Waiting for answers...");
             match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {
                 Ok(Ok(answers)) => {
-                    info!(phase = "clarification", "Received {} answers", answers.len());
+                    info!(
+                        phase = "clarification",
+                        "Received {} answers",
+                        answers.len()
+                    );
                     if answers.is_empty() || answers.iter().all(|a| a.trim().is_empty()) {
                         warn!(phase = "clarification", "All answers empty, skipping");
                         return Ok(String::new());
@@ -547,7 +599,13 @@ Example:
                     let formatted: Vec<String> = questions
                         .iter()
                         .zip(answers.iter())
-                        .map(|(q, a): (&ClarificationQuestion, &String)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
+                        .map(|(q, a): (&ClarificationQuestion, &String)| {
+                            format!(
+                                "Q: {}\nA: {}",
+                                q.question,
+                                if a.is_empty() { "(skipped)" } else { a }
+                            )
+                        })
                         .collect();
                     info!(phase = "clarification", "Completed successfully");
                     return Ok(formatted.join("\n\n"));
@@ -573,7 +631,10 @@ Example:
             for (j, opt) in q.options.iter().enumerate() {
                 println!("      {}. {}", j + 1, opt);
             }
-            print!("      Your choice (1-{} or type custom answer): ", q.options.len());
+            print!(
+                "      Your choice (1-{} or type custom answer): ",
+                q.options.len()
+            );
             io::stdout().flush().unwrap();
 
             let mut input = String::new();
@@ -597,7 +658,13 @@ Example:
         let formatted: Vec<String> = questions
             .iter()
             .zip(answers.iter())
-            .map(|(q, a): (&ClarificationQuestion, &String)| format!("Q: {}\nA: {}", q.question, if a.is_empty() { "(skipped)" } else { a }))
+            .map(|(q, a): (&ClarificationQuestion, &String)| {
+                format!(
+                    "Q: {}\nA: {}",
+                    q.question,
+                    if a.is_empty() { "(skipped)" } else { a }
+                )
+            })
             .collect();
         Ok(formatted.join("\n\n"))
     }
@@ -627,11 +694,11 @@ Example:
                 }
                 Ok(Err(_)) => {
                     warn!("Failed to receive resume confirmation from TUI");
-                    return Ok(true);  // Default to resume
+                    return Ok(true); // Default to resume
                 }
                 Err(_) => {
                     warn!("Timeout waiting for resume confirmation from TUI");
-                    return Ok(true);  // Default to resume
+                    return Ok(true); // Default to resume
                 }
             }
         }
@@ -639,7 +706,10 @@ Example:
         // Non-TUI mode: use stdin/stdout for confirmation
         use std::io::{self, Write};
         println!("\n[!] Found existing tasks:");
-        println!("    Completed: {} | Pending: {} | Failed: {}", completed, pending, failed);
+        println!(
+            "    Completed: {} | Pending: {} | Failed: {}",
+            completed, pending, failed
+        );
         println!();
         print!("    Resume from existing tasks? [Y/n]: ");
         io::stdout().flush().unwrap();
@@ -651,7 +721,7 @@ Example:
             return Ok(input.is_empty() || input == "y" || input == "yes");
         }
 
-        Ok(true)  // Default to resume
+        Ok(true) // Default to resume
     }
 
     async fn resume_tasks(&self) -> Result<()> {
@@ -694,20 +764,29 @@ Example:
     /// Check if a task is a clarification question
     fn is_clarification_task(&self, title: &str, description: &str) -> bool {
         let clarification_keywords = [
-            "需要更多信息", "需要信息", "请提供", "请描述", "请详细说明",
-            "need more information", "please provide", "please describe",
-            "clarification", "question", "询问", "问题",
+            "需要更多信息",
+            "需要信息",
+            "请提供",
+            "请描述",
+            "请详细说明",
+            "need more information",
+            "please provide",
+            "please describe",
+            "clarification",
+            "question",
+            "询问",
+            "问题",
         ];
-        
+
         let title_lower = title.to_lowercase();
         let desc_lower = description.to_lowercase();
-        
+
         for keyword in &clarification_keywords {
             if title_lower.contains(keyword) || desc_lower.contains(keyword) {
                 return true;
             }
         }
-        
+
         false
     }
 
@@ -745,7 +824,11 @@ Create a comprehensive ROADMAP.md document that includes:
 Output ONLY the markdown content for ROADMAP.md (no code blocks, just the raw markdown).
 Start with # Project Roadmap"#,
             self.config.goal,
-            self.config.doc_content.as_ref().map(|d| format!("\nDOCUMENT:\n{}", d)).unwrap_or_default(),
+            self.config
+                .doc_content
+                .as_ref()
+                .map(|d| format!("\nDOCUMENT:\n{}", d))
+                .unwrap_or_default(),
             clarification_section,
             lang_instruction
         );
@@ -753,7 +836,14 @@ Start with # Project Roadmap"#,
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None, Some("orchestrator"))
+            .call(
+                &prompt,
+                &self.config.workspace,
+                Some(TIMEOUT_PLAN),
+                None,
+                None,
+                Some("orchestrator"),
+            )
             .await?;
 
         if result.is_error {
@@ -767,7 +857,10 @@ Start with # Project Roadmap"#,
                 task_id: "generate_roadmap".to_string(),
                 tokens_used: usage.total_tokens,
             });
-            info!(tokens = usage.total_tokens, "Token usage (generate_roadmap)");
+            info!(
+                tokens = usage.total_tokens,
+                "Token usage (generate_roadmap)"
+            );
         }
 
         // Save roadmap to workspace
@@ -793,7 +886,10 @@ Start with # Project Roadmap"#,
 
         // Include clarification answers if available
         let clarification_section = if !clarification.is_empty() {
-            format!("\n\nCLARIFICATION (User's answers to clarifying questions):\n{}\n", clarification)
+            format!(
+                "\n\nCLARIFICATION (User's answers to clarifying questions):\n{}\n",
+                clarification
+            )
         } else {
             String::new()
         };
@@ -809,7 +905,10 @@ Start with # Project Roadmap"#,
                 } else {
                     roadmap
                 };
-                format!("\n\nPROJECT ROADMAP (Reference this for task breakdown):\n{}\n", truncated)
+                format!(
+                    "\n\nPROJECT ROADMAP (Reference this for task breakdown):\n{}\n",
+                    truncated
+                )
             } else {
                 String::new()
             }
@@ -842,7 +941,11 @@ Example response:
 
 Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             self.config.goal,
-            self.config.doc_content.as_ref().map(|d| format!("\nDOCUMENT:\n{}", d)).unwrap_or_default(),
+            self.config
+                .doc_content
+                .as_ref()
+                .map(|d| format!("\nDOCUMENT:\n{}", d))
+                .unwrap_or_default(),
             clarification_section,
             roadmap_section
         );
@@ -850,12 +953,22 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None, Some("orchestrator"))
+            .call(
+                &prompt,
+                &self.config.workspace,
+                Some(TIMEOUT_PLAN),
+                None,
+                None,
+                Some("orchestrator"),
+            )
             .await?;
 
         if result.is_error {
             error!(error = %result.text, "Failed to generate tasks");
-            return Err(Error::ClaudeCli(format!("Task generation failed: {}", result.text)));
+            return Err(Error::ClaudeCli(format!(
+                "Task generation failed: {}",
+                result.text
+            )));
         }
 
         // Emit token usage update if available
@@ -868,7 +981,10 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
         }
 
         // Log the raw response for debugging
-        info!("Task generation response length: {} chars", result.text.len());
+        info!(
+            "Task generation response length: {} chars",
+            result.text.len()
+        );
         info!("Task generation raw response: {}", result.text);
 
         // Try to extract JSON from the response
@@ -881,7 +997,10 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             json
         } else {
             error!(response = %text, "No JSON found in response");
-            return Err(Error::ParseError(format!("No JSON object found in response: {}", &text[..text.len().min(500)])));
+            return Err(Error::ParseError(format!(
+                "No JSON object found in response: {}",
+                &text[..text.len().min(500)]
+            )));
         };
 
         // Parse tasks
@@ -890,18 +1009,18 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
                 info!(count = tasks_response.tasks.len(), "Tasks generated");
 
                 let mut clarification_task = None;
-                
+
                 for t in tasks_response.tasks {
                     let mut task = Task::new(t.id, t.title.clone(), t.description.clone());
                     task.depends_on = t.depends_on;
-                    
+
                     // Check if this is a clarification task
                     if self.is_clarification_task(&t.title, &t.description) {
                         task.is_clarification = true;
                         clarification_task = Some(task.clone());
                         info!(task_id = %task.id, "Detected clarification task");
                     }
-                    
+
                     self.store.save_task(&task).await?;
 
                     // Emit TaskCreated event
@@ -925,7 +1044,11 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             }
             Err(e) => {
                 error!(error = %e, json = %json_text, "Failed to parse tasks JSON");
-                return Err(Error::ParseError(format!("Failed to parse tasks: {}. JSON: {}", e, &json_text[..json_text.len().min(500)])));
+                return Err(Error::ParseError(format!(
+                    "Failed to parse tasks: {}. JSON: {}",
+                    e,
+                    &json_text[..json_text.len().min(500)]
+                )));
             }
         }
 
@@ -938,12 +1061,12 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
         let mut task = task.clone();
         task.status = TaskStatus::InProgress;
         self.store.save_task(&task).await?;
-        
+
         // Emit clarification event
         self.emit_event(Event::ExecutionStateChanged {
             state: ExecutionState::Clarifying,
         });
-        
+
         // Check if in TUI mode
         if let Some(ref sender) = self.config.event_sender {
             // TUI mode: send clarification request and wait for response
@@ -954,7 +1077,7 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
                 description: task.description.clone(),
                 response_tx: crate::tui::event::ClarificationSender::new(tx),
             });
-            
+
             // Wait for user response (with timeout)
             info!("Waiting for user clarification response...");
             match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {
@@ -987,7 +1110,7 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             print!("    Your response: ");
             use std::io::{self, Write};
             io::stdout().flush().unwrap();
-            
+
             let mut input = String::new();
             if io::stdin().read_line(&mut input).is_ok() {
                 let response = input.trim().to_string();
@@ -1004,7 +1127,7 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
             }
             self.store.save_task(&task).await?;
         }
-        
+
         Ok(())
     }
 
@@ -1018,12 +1141,22 @@ Now generate tasks for the project goal above. Output ONLY the JSON object:"#,
 
         // Quick heuristic: skip assessment for obviously simple tasks
         let simple_keywords = [
-            "fix", "update", "add", "remove", "rename", "refactor",
-            "修复", "更新", "添加", "删除", "重命名", "优化",
+            "fix",
+            "update",
+            "add",
+            "remove",
+            "rename",
+            "refactor",
+            "修复",
+            "更新",
+            "添加",
+            "删除",
+            "重命名",
+            "优化",
         ];
         let title_lower = task.title.to_lowercase();
-        let is_simple_title = task.title.len() < 40
-            || simple_keywords.iter().any(|k| title_lower.contains(k));
+        let is_simple_title =
+            task.title.len() < 40 || simple_keywords.iter().any(|k| title_lower.contains(k));
         let is_short_desc = task.description.len() < 100;
 
         if is_simple_title && is_short_desc {
@@ -1065,7 +1198,14 @@ OR if splitting needed:
         let result = self
             .executor
             .runner
-            .call(&prompt, &self.config.workspace, Some(TIMEOUT_PLAN), None, None, Some("orchestrator"))
+            .call(
+                &prompt,
+                &self.config.workspace,
+                Some(TIMEOUT_PLAN),
+                None,
+                None,
+                Some("orchestrator"),
+            )
             .await?;
 
         // Emit token usage update if available
@@ -1200,7 +1340,10 @@ OR if splitting needed:
                 message_lines.push(format!("  - {}", file));
             }
             if task.modified_files.len() > 20 {
-                message_lines.push(format!("  ... and {} more files", task.modified_files.len() - 20));
+                message_lines.push(format!(
+                    "  ... and {} more files",
+                    task.modified_files.len() - 20
+                ));
             }
         }
 
@@ -1345,7 +1488,8 @@ OR if splitting needed:
                             }
 
                             // Check if review is needed
-                            let completed = self.store.count(TaskStatus::Completed).await.unwrap_or(0);
+                            let completed =
+                                self.store.count(TaskStatus::Completed).await.unwrap_or(0);
                             let total = self.store.total().await.unwrap_or(0);
                             if self.checkpoint.should_review(completed, total) {
                                 self.show_review_report().await;
@@ -1368,7 +1512,8 @@ OR if splitting needed:
             match self.checkpoint.pre_batch_checkpoint().await {
                 Ok(result) => {
                     // Throttle checkpoint warnings (only log every 30 seconds)
-                    let should_log_checkpoint = self.last_checkpoint_warning
+                    let should_log_checkpoint = self
+                        .last_checkpoint_warning
                         .map(|t| t.elapsed().as_secs() >= 30)
                         .unwrap_or(true);
                     if should_log_checkpoint && !result.warnings.is_empty() {
@@ -1378,7 +1523,8 @@ OR if splitting needed:
                         }
                     }
                     // Throttle blocked task warnings (only log every 30 seconds)
-                    let should_log_blocked = self.last_blocked_warning
+                    let should_log_blocked = self
+                        .last_blocked_warning
                         .map(|t| t.elapsed().as_secs() >= 30)
                         .unwrap_or(true);
                     if should_log_blocked && !result.blocked.is_empty() {
@@ -1431,8 +1577,9 @@ OR if splitting needed:
                     if pos > 0 {
                         let parent_id = &task.id[..pos];
                         // Check if the suffix after the last hyphen is a number
-                        if task.id[pos+1..].parse::<u32>().is_ok() {
-                            subtask_map.entry(parent_id.to_string())
+                        if task.id[pos + 1..].parse::<u32>().is_ok() {
+                            subtask_map
+                                .entry(parent_id.to_string())
                                 .or_default()
                                 .push(task.id.clone());
                         }
@@ -1477,7 +1624,11 @@ OR if splitting needed:
                 }
 
                 // Check if all dependencies are satisfied
-                if task.depends_on.iter().all(|dep| is_dependency_satisfied(dep)) {
+                if task
+                    .depends_on
+                    .iter()
+                    .all(|dep| is_dependency_satisfied(dep))
+                {
                     pending.push(task);
                 }
             }
@@ -1492,7 +1643,8 @@ OR if splitting needed:
                 }
                 // Only assess tasks that haven't been assessed yet (complexity is unknown)
                 // or tasks that are potentially complex
-                if task.complexity == Complexity::Unknown || task.complexity == Complexity::Complex {
+                if task.complexity == Complexity::Unknown || task.complexity == Complexity::Complex
+                {
                     let should_dispatch = self.assess_and_split(&mut task).await?;
                     if should_dispatch {
                         tasks_to_dispatch.push(task);
@@ -1504,8 +1656,10 @@ OR if splitting needed:
                 }
             }
 
-            let primary_pending: Vec<_> = tasks_to_dispatch.iter().filter(|t| t.depth == 0).collect();
-            let subtask_pending: Vec<_> = tasks_to_dispatch.iter().filter(|t| t.depth > 0).collect();
+            let primary_pending: Vec<_> =
+                tasks_to_dispatch.iter().filter(|t| t.depth == 0).collect();
+            let subtask_pending: Vec<_> =
+                tasks_to_dispatch.iter().filter(|t| t.depth > 0).collect();
 
             // Dispatch primary tasks
             for task in primary_pending {
@@ -1526,7 +1680,9 @@ OR if splitting needed:
                 let workspace = self.config.workspace.clone();
 
                 join_set.spawn(async move {
-                    let result = run_task_pipeline(store, executor, task.clone(), event_sender, workspace).await;
+                    let result =
+                        run_task_pipeline(store, executor, task.clone(), event_sender, workspace)
+                            .await;
                     (task_id, 0usize, result.ok().flatten())
                 });
             }
@@ -1550,7 +1706,9 @@ OR if splitting needed:
                 let workspace = self.config.workspace.clone();
 
                 join_set.spawn(async move {
-                    let result = run_task_pipeline(store, executor, task.clone(), event_sender, workspace).await;
+                    let result =
+                        run_task_pipeline(store, executor, task.clone(), event_sender, workspace)
+                            .await;
                     (task_id, 1usize, result.ok().flatten())
                 });
             }
@@ -1586,7 +1744,11 @@ OR if splitting needed:
                 // If we have failed tasks but no pending and nothing running,
                 // check if all non-failed tasks are completed/blocked
                 if failed_count > 0 {
-                    let blocked_count = total_tasks - completed_count - failed_count - skipped_count - in_progress_count;
+                    let blocked_count = total_tasks
+                        - completed_count
+                        - failed_count
+                        - skipped_count
+                        - in_progress_count;
                     warn!(
                         completed = completed_count,
                         failed = failed_count,
@@ -1719,8 +1881,7 @@ OR if splitting needed:
             info!(phase = "summary", "{}", "=".repeat(45));
             info!(
                 phase = "summary",
-                "All tasks processed: {}/{} completed, {} failed",
-                completed, total, failed
+                "All tasks processed: {}/{} completed, {} failed", completed, total, failed
             );
             info!(phase = "summary", "{}", "=".repeat(45));
         } else {
@@ -2001,7 +2162,10 @@ async fn run_task_pipeline(
 
     if !ai_passed {
         // Try to fix functionality issues
-        let fixed = match executor.fix_functionality_issues(&mut task, &ai_output).await {
+        let fixed = match executor
+            .fix_functionality_issues(&mut task, &ai_output)
+            .await
+        {
             Ok(f) => f,
             Err(e) => {
                 error!(task_id = %task.id, error = %e, "Functionality fix attempt failed");
@@ -2059,7 +2223,8 @@ async fn run_task_pipeline(
         });
 
         // Emit task summary with code changes
-        let file_summaries: Vec<crate::tui::FileChangeSummary> = task.modified_files
+        let file_summaries: Vec<crate::tui::FileChangeSummary> = task
+            .modified_files
             .iter()
             .map(|path| crate::tui::FileChangeSummary {
                 path: path.clone(),
@@ -2144,7 +2309,10 @@ async fn git_commit_task(workspace: &std::path::Path, task: &Task) -> Result<()>
             message_lines.push(format!("  - {}", file));
         }
         if task.modified_files.len() > 10 {
-            message_lines.push(format!("  ... and {} more files", task.modified_files.len() - 10));
+            message_lines.push(format!(
+                "  ... and {} more files",
+                task.modified_files.len() - 10
+            ));
         }
     }
 
@@ -2343,7 +2511,7 @@ fn extract_json_from_markdown(text: &str) -> Option<String> {
     let re = regex::Regex::new(r"```(?:json)?\s*\n?([\s\S]*?)\n?\s*```").ok()?;
     let caps = re.captures(text)?;
     let content = caps.get(1)?.as_str().trim();
-    
+
     // Verify it's valid JSON by checking if it starts with { or [
     if content.starts_with('{') || content.starts_with('[') {
         Some(content.to_string())
