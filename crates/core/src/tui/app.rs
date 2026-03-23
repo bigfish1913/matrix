@@ -1692,13 +1692,15 @@ mod tests {
     fn test_tab_navigation() {
         assert_eq!(Tab::Logs.next(), Tab::Tasks);
         assert_eq!(Tab::Tasks.next(), Tab::Output);
-        assert_eq!(Tab::Output.next(), Tab::Questions);
+        assert_eq!(Tab::Output.next(), Tab::Events);
+        assert_eq!(Tab::Events.next(), Tab::Questions);
         assert_eq!(Tab::Questions.next(), Tab::Logs);
 
         assert_eq!(Tab::Logs.prev(), Tab::Questions);
         assert_eq!(Tab::Tasks.prev(), Tab::Logs);
         assert_eq!(Tab::Output.prev(), Tab::Tasks);
-        assert_eq!(Tab::Questions.prev(), Tab::Output);
+        assert_eq!(Tab::Events.prev(), Tab::Output);
+        assert_eq!(Tab::Questions.prev(), Tab::Events);
     }
 
     #[test]
