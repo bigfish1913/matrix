@@ -40,7 +40,7 @@ pub const MAX_RETRIES: u32 = 3;
 pub const TIMEOUT_PLAN: u64 = 300;
 
 /// 执行操作超时（秒）
-pub const TIMEOUT_EXEC: u64 = 3600;
+pub const TIMEOUT_EXEC: u64 = 300; // 5 minutes, skip on timeout
 
 /// 最大 prompt 长度（字符）
 pub const MAX_PROMPT_LENGTH: usize = 80000;
@@ -102,7 +102,7 @@ mod tests {
         assert_eq!(MAX_DEPTH, 2);
         assert_eq!(MAX_RETRIES, 3);
         assert_eq!(TIMEOUT_PLAN, 300);
-        assert_eq!(TIMEOUT_EXEC, 3600);
+        assert_eq!(TIMEOUT_EXEC, 300);
         assert_eq!(MAX_PROMPT_LENGTH, 80000);
     }
 

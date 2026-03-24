@@ -1887,17 +1887,18 @@ async fn run_task_pipeline(
             }
             warn!(task_id = %task.id, attempt = task.retries, "Retrying");
         } else {
-            task.status = TaskStatus::Failed;
+            // Max retries exceeded - skip instead of fail
+            task.status = TaskStatus::Skipped;
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task as Failed");
+                error!(task_id = %task.id, error = %e, "Failed to save task as Skipped");
             }
-            error!(task_id = %task.id, "Permanently failed");
-            // Emit Failed status
+            warn!(task_id = %task.id, "Max retries exceeded, skipping task");
+            // Emit Skipped status
             if let Some(ref sender) = event_sender {
                 let _ = sender.send(Event::TaskStatusChanged {
                     id: task.id.clone(),
-                    status: TaskStatus::Failed,
+                    status: TaskStatus::Skipped,
                 });
             }
         }
@@ -1936,18 +1937,19 @@ async fn run_task_pipeline(
             warn!(task_id = %task.id, attempt = task.retries, "Tests failed, retrying");
             return Ok(None);
         } else if !fixed {
-            task.status = TaskStatus::Failed;
+            // Max retries exceeded - skip instead of fail
+            task.status = TaskStatus::Skipped;
             task.error = Some(format!("Tests failed: {}", output));
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task as Failed");
+                error!(task_id = %task.id, error = %e, "Failed to save task as Skipped");
             }
-            error!(task_id = %task.id, "Tests failed permanently");
-            // Emit Failed status
+            warn!(task_id = %task.id, "Tests failed, max retries exceeded, skipping");
+            // Emit Skipped status
             if let Some(ref sender) = event_sender {
                 let _ = sender.send(Event::TaskStatusChanged {
                     id: task.id.clone(),
-                    status: TaskStatus::Failed,
+                    status: TaskStatus::Skipped,
                 });
             }
             return Ok(None);
@@ -1984,18 +1986,19 @@ async fn run_task_pipeline(
             warn!(task_id = %task.id, attempt = task.retries, "Build failed, retrying");
             return Ok(None);
         } else if !fixed {
-            task.status = TaskStatus::Failed;
+            // Max retries exceeded - skip instead of fail
+            task.status = TaskStatus::Skipped;
             task.error = Some(format!("Build failed: {}", output));
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task as Failed");
+                error!(task_id = %task.id, error = %e, "Failed to save task as Skipped");
             }
-            error!(task_id = %task.id, "Build failed permanently");
-            // Emit Failed status
+            warn!(task_id = %task.id, "Build failed, max retries exceeded, skipping");
+            // Emit Skipped status
             if let Some(ref sender) = event_sender {
                 let _ = sender.send(Event::TaskStatusChanged {
                     id: task.id.clone(),
-                    status: TaskStatus::Failed,
+                    status: TaskStatus::Skipped,
                 });
             }
             return Ok(None);
@@ -2032,18 +2035,19 @@ async fn run_task_pipeline(
             warn!(task_id = %task.id, attempt = task.retries, "AI review failed, retrying");
             return Ok(None);
         } else if !fixed {
-            task.status = TaskStatus::Failed;
+            // Max retries exceeded - skip instead of fail
+            task.status = TaskStatus::Skipped;
             task.error = Some(format!("AI review failed: {}", output));
             task.started_at = None;
             if let Err(e) = store.save_task(&task).await {
-                error!(task_id = %task.id, error = %e, "Failed to save task as Failed");
+                error!(task_id = %task.id, error = %e, "Failed to save task as Skipped");
             }
-            error!(task_id = %task.id, "AI review failed permanently");
-            // Emit Failed status
+            warn!(task_id = %task.id, "AI review failed, max retries exceeded, skipping");
+            // Emit Skipped status
             if let Some(ref sender) = event_sender {
                 let _ = sender.send(Event::TaskStatusChanged {
                     id: task.id.clone(),
-                    status: TaskStatus::Failed,
+                    status: TaskStatus::Skipped,
                 });
             }
             return Ok(None);
