@@ -74,6 +74,10 @@ pub struct Orchestrator {
     last_blocked_warning: Option<Instant>,
     /// Last time checkpoint warnings were logged (for throttling)
     last_checkpoint_warning: Option<Instant>,
+    /// Last time progress report was emitted (5 min interval)
+    last_report: Option<Instant>,
+    /// Last event time (for status display)
+    last_event_time: Option<Instant>,
     /// Question store for persistent question storage
     question_store: Arc<QuestionStore>,
     /// Event receiver for receiving responses from TUI
@@ -142,6 +146,8 @@ impl Orchestrator {
             last_progress: (0, 0, 0, 0),
             last_blocked_warning: None,
             last_checkpoint_warning: None,
+            last_report: None,
+            last_event_time: None,
             question_store,
             event_receiver,
             pending_question_responses: HashMap::new(),
@@ -1697,13 +1703,23 @@ OR if splitting needed:
         let completed = self.store.count(TaskStatus::Completed).await.unwrap_or(0);
         let pending = self.store.count(TaskStatus::Pending).await.unwrap_or(0);
         let failed = self.store.count(TaskStatus::Failed).await.unwrap_or(0);
+        let in_progress = self.store.count(TaskStatus::InProgress).await.unwrap_or(0);
 
         let elapsed = self.start_time.map(|t| t.elapsed()).unwrap_or_default();
         let elapsed_str = format_duration(elapsed);
 
+        // Update last event time
+        self.last_event_time = Some(Instant::now());
+
         // Check if progress has changed since last time
         let current_progress = (completed, pending, failed, total);
         let progress_changed = current_progress != self.last_progress;
+
+        // Check if we should emit a periodic report (every 5 minutes)
+        let should_report = match self.last_report {
+            None => true,
+            Some(last) => last.elapsed().as_secs() >= crate::config::REPORT_INTERVAL_SECS,
+        };
 
         // In TUI mode, use tracing instead of println to avoid interfering with TUI
         // Only log if progress has actually changed to avoid spamming the logs panel
@@ -1714,6 +1730,16 @@ OR if splitting needed:
                     completed, pending, failed, total
                 );
                 self.last_progress = current_progress;
+            }
+
+            // Periodic progress report (every 5 minutes)
+            if should_report {
+                self.last_report = Some(Instant::now());
+                let report = format!(
+                    "📊 Report | ⏱️ {} | ✅ {} | 🔄 {} | ⏳ {} | ❌ {}",
+                    elapsed_str, completed, in_progress, pending, failed
+                );
+                info!("{}", report);
             }
 
             // Only emit ProgressUpdate when progress actually changed

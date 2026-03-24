@@ -23,8 +23,8 @@ pub struct HealthConfig {
 impl Default for HealthConfig {
     fn default() -> Self {
         Self {
-            // Increased from 10 to 30 minutes since AI review can take a long time
-            stall_threshold_minutes: 30,
+            // 5 minutes - more responsive feedback for stalled tasks
+            stall_threshold_minutes: 5,
             warning_throttle_secs: 30,
         }
     }

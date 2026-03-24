@@ -351,6 +351,16 @@ impl TaskExecutor {
 
                 Ok(true)
             }
+            Err(Error::Timeout(msg)) => {
+                // Timeout - skip and continue to next stage
+                warn!(task_id = %task.id, "Execution timed out, skipping: {}", msg);
+                self.emit_event(Event::TaskProgress {
+                    id: task.id.clone(),
+                    message: format!("⏭️ Execution timed out, skipping to verification"),
+                });
+                // Return true to continue pipeline (skip execution stage)
+                Ok(true)
+            }
             Err(e) => {
                 warn!(task_id = %task.id, title = %task.title, error = %e, "Execution error");
                 task.error = Some(e.to_string());
